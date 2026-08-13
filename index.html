@@ -399,7 +399,13 @@ function credencial(){ try{return localStorage.getItem(PORTERO_LSK)||""}catch(e)
 var PYOD_EXEC="https://script.google.com/macros/s/AKfycbwlDDCWWzOWYZsUpBU9uqsQ7aenQ469PF6s6FkNlBFS1_cJSU5njG9oQmuyELy5zlqzFg/exec";
   function _pyodCerrar(){ try{localStorage.removeItem(PORTERO_LSK);sessionStorage.removeItem("pyod_rol")}catch(e){}; location.reload(); }
   function _pyodAviso(){ if(document.getElementById("pyodAviso"))return; var d=document.createElement("div");d.id="pyodAviso";d.style.cssText="position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:2147483000;max-width:min(560px,92vw);background:#221E17;color:#F1EDE3;border:1px solid rgba(255,255,255,.14);border-left:3px solid #B98B3C;border-radius:12px;padding:14px 16px;font-family:'Instrument Sans',system-ui,sans-serif;font-size:13px;line-height:1.5;box-shadow:0 18px 48px rgba(0,0,0,.5)";d.innerHTML='<b style=\"color:#B98B3C\">Tu sesión es válida.</b> Este tablero no validó tu acceso: su backend (Apps Script) necesita re-desplegarse. Tu sesión NO se cerró. <a href=\"https://alexpueblag.github.io/yod-portal/os/\" style=\"color:#B98B3C\">Volver a YOD OS</a> · <button id=\"pyodAvX\" style=\"background:none;border:0;color:#8A8272;cursor:pointer;text-decoration:underline;font:inherit\">Ocultar</button>';document.body.appendChild(d);var x=document.getElementById("pyodAvX");if(x)x.onclick=function(){d.remove();}; }
-  function credencialRechazada(){ var k=""; try{k=localStorage.getItem(PORTERO_LSK)||"";}catch(e){} if(!k){_pyodCerrar();return;} fetch(PYOD_EXEC+"?recurso=canje&t="+encodeURIComponent(k),{credentials:"omit"}).then(function(r){return r.json();}).then(function(j){ if(j&&j.ok){_pyodAviso();} else {_pyodCerrar();} }).catch(function(){_pyodAviso();}); }
+  // ANTI-LOOP (agosto 2026): con la suscripción del dominio suspendida, el
+  // backend contesta "liga" a las claves del portero de respaldo aunque la
+  // sesión sea válida. Antes esto borraba la credencial y recargaba → bucle
+  // infinito y pantalla en blanco. Ahora NUNCA se cierra la sesión por "liga":
+  // solo se muestra el aviso, y loadAll ya cayó al respaldo local. La sesión se
+  // suelta únicamente desde el botón "Salir" (logout llama a _pyodCerrar).
+  function credencialRechazada(){ _pyodAviso(); }
 async function api(action, payload={}){
   if(DEMO) return {ok:true, demo:true};
   if(!APPS_SCRIPT_URL) throw new Error("Backend en reconexión: falta la URL /exec del Apps Script.");
@@ -414,6 +420,18 @@ async function api(action, payload={}){
   if(!data.ok){ if(data.error==="liga") credencialRechazada(); throw new Error(data.error==="admin" ? "Necesitas permiso de administrador para esta acción." : (data.error||"No se pudo completar la acción.")); }
   return data;
 }
+// Respaldo empacado (agosto 2026): mientras la suscripción del dominio esté
+// suspendida, el backend LEE pero no puede validar la clave del portero de
+// respaldo (contesta "liga"). Para que la tesorería NUNCA aparezca en blanco,
+// si getAll falla se cae a datos.json de este mismo repo. Es una FOTO de solo
+// lectura; al reactivar Google, el backend vuelve a mandar solo. Refrescar la
+// foto = volver a correr el rescate (ver memoria ydr-recuperar-datos-vivos).
+async function cargarRespaldoLocal(){
+  const r = await fetch("datos.json?cb="+Date.now(), {cache:"no-store"});
+  if(!r.ok) throw new Error("http_"+r.status);
+  const j = await r.json();
+  return j.data || j;
+}
 async function loadAll(){
   if(DEMO){document.getElementById('demoBanner').style.display='block';renderAll();return}
   try{
@@ -424,12 +442,20 @@ async function loadAll(){
     }
     document.getElementById('syncInfo').textContent = "Sync: " + new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
     renderAll();
-  }catch(e){alert("Error cargando datos: "+e.message)}
+  }catch(e){
+    try{
+      DB = await cargarRespaldoLocal();
+      var b=document.getElementById('demoBanner');
+      if(b){ b.textContent="Modo consulta · respaldo local (el servidor no está disponible por ahora). Los datos son la última foto; no se pueden editar hasta reconectar."; b.style.display='block'; }
+      var s=document.getElementById('syncInfo'); if(s) s.textContent="Respaldo local";
+      renderAll();
+    }catch(e2){ alert("Error cargando datos: "+e.message); }
+  }
 }
 
 // ===================== AUTH =====================
 // El acceso lo gobierna el Portero YOD (portero.js). Salir = soltar la credencial.
-function logout(){ credencialRechazada(); }
+function logout(){ _pyodCerrar(); }
 function quien(){ let q = localStorage.getItem("yodflujo-user"); if(!q){ q = prompt("¿Quién eres? (se usa para el historial)")||"equipo"; localStorage.setItem("yodflujo-user",q);} return q; }
 
 // ===================== HELPERS =====================
