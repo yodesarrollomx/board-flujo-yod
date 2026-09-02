@@ -3,7 +3,7 @@
 Board de flujo con bolsas por proyecto, sincronizado con Google Sheets ("YOD - Flujo 2026").
 
 ## URL en vivo
-https://alexpueblag.github.io/board-flujo-yod/
+https://yodesarrollomx.github.io/board-flujo-yod/
 
 ## Acceso (Portero YOD)
 - El acceso lo gobierna el **Portero YOD** (`portero.js` de potenciales-yod): liga mágica de 90 días, clave de equipo o Google.
