@@ -18,7 +18,7 @@ Tablero de **flujo de efectivo**: saldo del día, bolsas por proyecto, movimient
 2. **Los datos reales NO viven en el repo.** `DB` arranca vacío a propósito (`index.html:384-392`, comentario explícito). En junio-2026 se filtraron 21 movimientos, saldos y 307 mensajes de WhatsApp con nombres y RFCs en el HTML público; se limpió el 2026-06-27 reescribiendo el historial git (memoria `yod-boards-seguridad`). No vuelvas a sembrar datos aquí.
 3. **El respaldo va CIFRADO, nunca en claro.** `datos.enc` (AES-256-CBC, PBKDF2 200k, sin frase escrita en el código: `index.html:449-483`). `datos.json` está en `.gitignore`. Si el archivo se pudiera leer, el gate no serviría: `portero.js` corre en el navegador y no protege archivos estáticos.
 4. **El servidor valida, no el navegador.** El backend valida la credencial `k` contra el Portero (`apps-script/portero-auth.gs:credencialValida_`), fail-closed. Sin credencial: `{ok:false,error:'liga'}`. El HTML público ya no lleva ningún secreto (el `SHARED_SECRET` viejo se retiró en la contención 2026-07-12).
-5. **Un rechazo del backend NUNCA cierra la sesión.** `credencialRechazada()` solo muestra aviso (`index.html:404-410`). Si vuelves a poner ahí el borrado de credencial + reload, regresa el bucle infinito de pantalla en blanco de agosto-2026.
+5. **Un rechazo del backend NUNCA cierra la sesión.** `credencialRechazada()` solo muestra aviso (`index.html:408`). Si vuelves a poner ahí el borrado de credencial + reload, regresa el bucle infinito de pantalla en blanco de agosto-2026.
 6. **Guardar confirma con el servidor ANTES de pintar.** Nada de movimientos fantasma (commit `27fbbe0`, 2026-07-15).
 7. **No hagas POST a `/exec`.** Cada `addMovimiento` / `addPago` escribe dinero real en el Sheet de tesorería.
 8. **No toques el Apps Script desde aquí.** Ver la advertencia de ESPEJO abajo.
@@ -29,7 +29,7 @@ Tablero de **flujo de efectivo**: saldo del día, bolsas por proyecto, movimient
 - `apps-script/portero-auth.gs` — **no corre solo**: es el pedazo que hay que pegar en el Apps Script del Flujo para que valide contra el Portero. Trae sus instrucciones adentro.
 - `datos.enc` — foto cifrada de la tesorería (243,756 bytes) para modo consulta cuando el backend no responde.
 - `README.md` — versión corta de esto.
-- `.gitignore` — solo una línea, y es la importante: `datos.json` nunca se publica.
+- `.gitignore` — una sola regla y es la importante: `datos.json` nunca se publica.
 
 ## Arquitectura de datos
 
@@ -94,8 +94,8 @@ Si no hay llave  ──► "Necesitas iniciar sesión para ver la tesorería" y 
 ## Por confirmar (NO afirmar sin preguntar)
 
 - ¿El paso de reconexión del README (pegar `portero-auth.gs` y hacer **Nueva implementación**) ya se hizo? El README lo pinta como pendiente, pero `index.html:377` ya trae una URL `/exec` y la memoria `yod-boards-seguridad` dice que ese deployment se verificó vivo el 2026-07-15. **Pregunta:** ¿el README está desactualizado, o falta todavía un paso? (marcado 2026-09-04)
-- ¿La pestaña `Mensajes` del Sheet sigue existiendo y alimentando el panel de IA? `CHAT_DATA` está vacío en el repo (`index.html:980`) y el saludo del panel dice "307 mensajes" a mano (`:996`). **Pregunta:** ¿ese número es real hoy o quedó congelado?
-- ¿Quién es el proveedor del modelo detrás de la acción `ai` y de la clave `checkkey` ("5.5 Pro" en el badge, `index.html:1021`)? No está en este repo — vive en el Apps Script.
+- ¿La pestaña `Mensajes` del Sheet sigue existiendo y alimentando el panel de IA? `CHAT_DATA` está vacío en el repo (`index.html:980`) y el saludo del panel dice "307 mensajes" a mano (`:993`). **Pregunta:** ¿ese número es real hoy o quedó congelado?
+- ¿Quién es el proveedor del modelo detrás de la acción `ai` y de la clave `checkkey` ("5.5 Pro" en el badge, `index.html:1023`; y "Modelo: 5.5" en `:273`)? No está en este repo — vive en el Apps Script.
 - `datos.enc` se descarga público (HTTP 200, 243,756 bytes, comprobado 2026-09-04). Está cifrado, pero cualquiera puede bajarlo y atacarlo sin límite de intentos. **Pregunta a Alejandro:** ¿se deja así o el respaldo debe servirse detrás del backend?
 - ¿Cada cuándo se refresca `datos.enc`? La última escritura del archivo es del 2026-08-28; la foto envejece en silencio.
 
