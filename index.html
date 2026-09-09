@@ -585,9 +585,11 @@ async function nuevaBolsa(sel){
   if(!nombre){ if(sel) sel.value="Por clasificar"; return null; }
   const existe=DB.bolsas.some(b=>String(b.nombre).trim().toLowerCase()===nombre.toLowerCase())||DB.movimientos.some(m=>String(m.proyecto).trim().toLowerCase()===nombre.toLowerCase());
   if(existe){ alert("Ya existe una bolsa con ese nombre."); if(sel) sel.value=nombre; return nombre; }
+  // Confirmar con el servidor ANTES de tocar la base local: si falla, no queda una bolsa fantasma que nadie puede usar de verdad.
+  try{ await api("addBolsa",{nombre:nombre,usuario:quien()}); }
+  catch(e){ fToast("No se creó la bolsa ("+e.message+"). No la uses todavía.",1); if(sel) sel.value="Por clasificar"; return null; }
   DB.bolsas.push({nombre:nombre,presupuesto:0});
   DB.historial.unshift({ts:now(),usuario:quien(),accion:"Alta bolsa",detalle:nombre});
-  try{ await api("addBolsa",{nombre:nombre,usuario:quien()}); }catch(e){ alert(e.message); }
   fillSelects(); if(sel) sel.value=nombre; renderAll();
   return nombre;
 }
@@ -724,9 +726,12 @@ async function resolverDuda(id){
   const sel=document.getElementById('duda-'+id); if(!sel.value) return;
   let destino=sel.value;
   if(destino==="__nueva__"){ destino=await nuevaBolsa(); if(!destino) return; }
-  const m=DB.movimientos.find(x=>x.id===id); m.proyecto=destino;
+  const m=DB.movimientos.find(x=>x.id===id); if(!m) return;
+  // Confirmar con el servidor ANTES de tocar la base local: sin fantasmas si falla.
+  try{ await api("updateMovimiento",{id,patch:{proyecto:destino},usuario:quien()}); }
+  catch(e){ fToast("No se acomodó ("+e.message+"). Sigue en Dudas — reintenta.",1); return; }
+  m.proyecto=destino;
   DB.historial.unshift({ts:new Date().toISOString().slice(0,16).replace("T"," "),usuario:quien(),accion:"Acomodó duda",detalle:`${m.beneficiario} ${fmt(m.monto)} → ${destino}`});
-  try{ await api("updateMovimiento",{id,patch:{proyecto:destino},usuario:quien()}); }catch(e){alert(e.message)}
   renderAll();
 }
 
@@ -856,8 +861,10 @@ function renderMovs(){
 async function toggleFact(id){
   const m=DB.movimientos.find(x=>x.id===id); if(!m) return;
   const next=m.facturado==="Sí"?"No":m.facturado==="No"?"":"Sí";
+  // Confirmar con el servidor ANTES de tocar la base local: sin fantasmas si falla.
+  try{ await api("updateMovimiento",{id,patch:{facturado:next},usuario:quien()}); }
+  catch(e){ fToast("No se guardó el cambio de factura ("+e.message+"). Sigue igual — reintenta.",1); return; }
   m.facturado=next;
-  try{ await api("updateMovimiento",{id,patch:{facturado:next},usuario:quien()}); }catch(e){alert(e.message)}
   renderMovs();
 }
 function clearFilters(){["fBolsa","fTipo","fMes","fDesde","fHasta","fTxt"].forEach(id=>document.getElementById(id).value="");renderMovs()}
@@ -904,16 +911,18 @@ function renderPlan(){
 async function marcarPagado(id){
   const p=DB.pagos.find(x=>x.id===id); if(!p) return;
   if(!confirm(`¿Marcar "${p.concepto}" como pagado? Se registrará el movimiento.`)) return;
-  p.estado="Pagado";
   const hoy=new Date().toISOString().slice(0,10);
   const mov={id:"M-"+Date.now(),fecha:hoy,tipo:"Egreso",monto:p.monto,beneficiario:p.concepto,proyecto:p.proyecto,notas:"Desde planificación"};
+  // Confirmar con el servidor ANTES de tocar la base local: sin fantasmas si falla.
+  try{ await api("pagoRealizado",{id,mov,usuario:quien()}); }
+  catch(e){ fToast("No se marcó como pagado ("+e.message+"). Sigue pendiente — reintenta.",1); return; }
+  p.estado="Pagado";
   DB.movimientos.push(mov);
   if(p.tipoPago!=="Único"){ // recurrente/fijo: crear el del mes siguiente
     const d=new Date(p.fechaLimite); d.setMonth(d.getMonth()+1);
     DB.pagos.push({...p,id:"P-"+Date.now(),fechaLimite:d.toISOString().slice(0,10),estado:"Pendiente"});
   }
   DB.historial.unshift({ts:new Date().toISOString().slice(0,16).replace("T"," "),usuario:quien(),accion:"Pago realizado",detalle:`${p.concepto} ${fmt(p.monto)}`});
-  try{ await api("pagoRealizado",{id,mov,usuario:quien()}); }catch(e){alert(e.message)}
   renderAll();
 }
 
