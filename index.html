@@ -211,8 +211,10 @@ h1.title{color:var(--ink)}
         <button class="btn ghost chartTab" onclick="setChart('ievsmes',this)"><i class="ti ti-arrows-diff"></i>Ingresos vs Egresos</button>
         <button class="btn ghost chartTab" onclick="setChart('flujobolsa',this)"><i class="ti ti-chart-bar"></i>Flujo por bolsa</button>
         <button class="btn ghost chartTab" onclick="setChart('dona',this)"><i class="ti ti-chart-donut"></i>Distribución egresos</button>
+        <button class="btn ghost chartTab" onclick="setChart('proy8',this)"><i class="ti ti-calendar-stats"></i>Próximas 8 semanas</button>
       </div>
       <div style="position:relative;height:340px"><canvas id="flowChart"></canvas></div>
+      <div id="proy8Nota" class="muted" style="margin-top:.6rem"></div>
     </div>
     <div class="section" id="alertasSec"><h3>Alertas</h3><div id="concil"></div><div id="alertas"></div></div>
   </div>
@@ -678,6 +680,20 @@ function _mesLabel(k){var p=String(k).split("-");return (_MESN[parseInt(p[1],10)
 function _dinero(v){return "$"+Math.round(v).toLocaleString("es-MX");}
 function setChart(t,btn){chartTipo=t;document.querySelectorAll('.chartTab').forEach(x=>x.classList.remove('on'));if(btn)btn.classList.add('on');renderChart();}
 function temaVar(n,fb){try{var v=getComputedStyle(document.documentElement).getPropertyValue(n).trim();return v||fb}catch(e){return fb}}
+/* FL-4 (26-sep): proyección a 8 semanas con lo que ya está capturado: saldo actual + ingresos
+   esperados no cobrados − pagos no pagados, semana por semana. Lo vencido cae en la semana 1:
+   no se esconde. No inventa nada: si no hay compromisos, la línea se queda plana. */
+function proyeccion8(db,hoy){
+  hoy=hoy?new Date(hoy):new Date(); hoy.setHours(0,0,0,0);
+  const ini=new Date(hoy), sem=[];
+  for(let i=0;i<8;i++){const a=new Date(ini);a.setDate(a.getDate()+7*i);const b=new Date(a);b.setDate(b.getDate()+7);sem.push({desde:a,hasta:b,ing:0,egr:0,saldo:0,items:[]});}
+  const idx=f=>{const d=new Date(String(f||'').slice(0,10)+'T00:00:00');if(isNaN(d))return -1;if(d<ini)return 0;const k=Math.floor((d-ini)/(7*864e5));return k<8?k:-1;};
+  (db.pagos||[]).filter(p=>p.estado!=="Pagado").forEach(p=>{const k=idx(p.fechaLimite);if(k>=0){sem[k].egr+=+p.monto||0;sem[k].items.push('− '+p.concepto);}});
+  (db.ingresosEsperados||[]).filter(i=>i.estatus!=="Cobrado").forEach(i=>{const k=idx(i.fechaEsperada);if(k>=0){sem[k].ing+=+i.monto||0;sem[k].items.push('+ '+(i.concepto||i.origen||'ingreso'));}});
+  let s=+((db.saldo||{}).monto)||0; sem.forEach(w=>{s+=w.ing-w.egr;w.saldo=s;});
+  return sem;
+}
+if(typeof module!=="undefined"&&module.exports) module.exports={proyeccion8};
 function renderChart(){
   if(typeof Chart==="undefined")return;
   // Ejes y leyendas leen el tema activo (claro/oscuro) desde los tokens
@@ -698,6 +714,14 @@ function renderChart(){
     var byP={};movs.forEach(function(m){var pr=m.proyecto||"Sin bolsa";byP[pr]=byP[pr]||{i:0,e:0};if(m.tipo==="Ingreso")byP[pr].i+=+m.monto;else byP[pr].e+=+m.monto;});
     var ps=Object.keys(byP).sort(function(a,b){return (byP[b].i+byP[b].e)-(byP[a].i+byP[a].e);});
     cfg={type:"bar",data:{labels:ps,datasets:[{label:"Entró",data:ps.map(function(pr){return byP[pr].i;}),backgroundColor:"#8FBF8B"},{label:"Salió",data:ps.map(function(pr){return byP[pr].e;}),backgroundColor:"#E0605A"}]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{tooltip:{callbacks:{label:function(c){return c.dataset.label+": "+_dinero(c.parsed.x);}}}},scales:{x:{ticks:{callback:function(v){return _dinero(v);}}}}}};
+  } else if(chartTipo==="proy8"){
+    var W=proyeccion8(DB);
+    var cols=W.map(function(w){return w.saldo<0?"#E0605A":"#c9a96e";});
+    cfg={type:"bar",data:{labels:W.map(function(w,i){return "Sem "+(i+1)+" · "+_fechaCorta(w.desde.toISOString());}),
+      datasets:[{type:"line",label:"Saldo proyectado",data:W.map(function(w){return w.saldo;}),borderColor:"#c9a96e",pointBackgroundColor:cols,pointRadius:4,tension:.25,yAxisID:"y"},
+        {label:"Entra",data:W.map(function(w){return w.ing;}),backgroundColor:"#8FBF8B",yAxisID:"y"},
+        {label:"Sale",data:W.map(function(w){return w.egr;}),backgroundColor:"#E0605A",yAxisID:"y"}]},
+      options:{responsive:true,maintainAspectRatio:false,scales:{y:ejeY},plugins:{tooltip:{callbacks:{afterBody:function(it){var w=W[it[0].dataIndex];return w.items.slice(0,6);}}}}}};
   } else {
     var byE={};movs.forEach(function(m){if(esTransfer(m))return;if(m.tipo!=="Egreso")return;var pr=m.proyecto||"Sin bolsa";byE[pr]=(byE[pr]||0)+ +m.monto;});
     var es=Object.keys(byE).sort(function(a,b){return byE[b]-byE[a];});
@@ -705,6 +729,12 @@ function renderChart(){
     cfg={type:"doughnut",data:{labels:es,datasets:[{data:es.map(function(pr){return byE[pr];}),backgroundColor:es.map(function(pr,i){return cols[i%cols.length];})}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"right",labels:{boxWidth:12,font:{size:11}}},tooltip:{callbacks:{label:function(c){return c.label+": "+_dinero(c.parsed);}}}}}};
   }
   chartObj=new Chart(cv,cfg);
+  var pn=document.getElementById('proy8Nota');
+  if(pn){ if(chartTipo!=="proy8"){pn.textContent="";} else {
+    var W8=proyeccion8(DB), neg=W8.findIndex(function(w){return w.saldo<0;}), min=W8.reduce(function(a,w){return w.saldo<a.saldo?w:a;},W8[0]);
+    pn.innerHTML=neg>=0?'<span style="color:#E0605A"><b>En la semana '+(neg+1)+' ('+_fechaCorta(W8[neg].desde.toISOString())+') el saldo no alcanza: '+_dinero(W8[neg].saldo)+'.</b></span> Mueve un pago o asegura un ingreso antes.'
+      :'Con lo capturado, el saldo alcanza las 8 semanas. La semana más apretada es la '+(W8.indexOf(min)+1)+' con '+_dinero(min.saldo)+'.';
+  } }
 }
 function renderSaldoChart(){
   const el=document.getElementById('saldoChart');
