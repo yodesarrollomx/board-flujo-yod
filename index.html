@@ -346,9 +346,10 @@ h1.title{color:var(--ink)}
   <label>Concepto / motivo</label><input id="trConcepto" placeholder="Ej. préstamo a Nex, reposición caja…">
   <label>Quién presta / responsable</label><input id="trQuien" placeholder="Ej. Alejandro, Casa Alysa, socio…">
   <div style="display:flex;gap:.6rem;margin-top:1rem">
-    <button class="btn" onclick="saveTransfer()">Transferir</button>
+    <button class="btn" id="trGuardar" onclick="saveTransfer()">Transferir</button>
     <button class="btn ghost" onclick="closeM('mTransfer')">Cancelar</button>
   </div>
+  <p class="muted" id="trEstado" role="status" aria-live="polite"></p>
 </div></div>
 
 <!-- MODAL UNIFICAR BOLSAS -->
@@ -526,6 +527,7 @@ function logout(){ _pyodCerrar(); }
 function quien(){ let q = localStorage.getItem("yodflujo-user"); if(!q){ q = prompt("¿Quién eres? (se usa para el historial)")||"equipo"; localStorage.setItem("yodflujo-user",q);} return q; }
 
 // ===================== HELPERS =====================
+function escHtml(value){return String(value==null?'':value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
 const fmt = n => "$"+Number(n).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmt0 = n => "$"+Math.round(Number(n)).toLocaleString('es-MX');
 const mesDe = f => { const d=f.slice(0,7).split("-"); return MESES[+d[1]-1]+" "+d[0]; };
@@ -590,7 +592,7 @@ async function nuevaBolsa(sel){
   if(existe){ alert("Ya existe una bolsa con ese nombre."); if(sel) sel.value=nombre; return nombre; }
   // Confirmar con el servidor ANTES de tocar la base local: si falla, no queda una bolsa fantasma que nadie puede usar de verdad.
   try{ await api("addBolsa",{nombre:nombre,usuario:quien()}); }
-  catch(e){ fToast("No se creó la bolsa ("+e.message+"). No la uses todavía.",1); if(sel) sel.value="Por clasificar"; return null; }
+  catch(e){ fToast("No se pudo confirmar la bolsa ("+e.message+"). Actualiza y revisa antes de repetir.",1); if(sel) sel.value="Por clasificar"; return null; }
   DB.bolsas.push({nombre:nombre,presupuesto:0});
   DB.historial.unshift({ts:now(),usuario:quien(),accion:"Alta bolsa",detalle:nombre});
   fillSelects(); if(sel) sel.value=nombre; renderAll();
@@ -602,10 +604,10 @@ function fillSelects(){
   ["mvProy","pgProy","igProy","fBolsa"].forEach(id=>{
     const sel=document.getElementById(id); const keep=id==="fBolsa"?'<option value="">Todas las bolsas</option>':"";
     const nueva=id==="fBolsa"?"":'<option value="__nueva__">➕ Crear bolsa nueva…</option>';
-    sel.innerHTML=keep+proys.map(p=>`<option>${p}</option>`).join("")+nueva;
+    sel.innerHTML=keep+proys.map(p=>`<option>${escHtml(p)}</option>`).join("")+nueva;
   });
   const meses=[...new Set(DB.movimientos.map(m=>mesDe(m.fecha)))];
-  document.getElementById('fMes').innerHTML='<option value="">Todos los meses</option>'+meses.map(m=>`<option>${m}</option>`).join("");
+  document.getElementById('fMes').innerHTML='<option value="">Todos los meses</option>'+meses.map(m=>`<option>${escHtml(m)}</option>`).join("");
 }
 
 function renderDash(){
@@ -615,7 +617,7 @@ function renderDash(){
   const dias=diasDeCaja();
   const sem=dias===null?["a","—"]:dias>30?["v",dias+" días"]:dias>=14?["a",dias+" días"]:["r",dias+" días"];
   document.getElementById('kpis').innerHTML=`
-    <div class="card"><div class="k">Saldo actual</div><div class="v gold">${fmt(DB.saldo.monto)}</div><div class="note">${DB.saldo.fecha}</div></div>
+    <div class="card"><div class="k">Saldo actual</div><div class="v gold">${fmt(DB.saldo.monto)}</div><div class="note">${escHtml(DB.saldo.fecha)}</div></div>
     <div class="card"><div class="k">Días de caja</div><div class="v semaforo"><span class="dot ${sem[0]} ${sem[0]==='r'?'pulse':''}"></span>${sem[1]}</div><div class="note">al ritmo de gasto de 14 días</div></div>
     <div class="card"><div class="k">Ingresos</div><div class="v green">${fmt0(ing)}</div><div class="note">acumulado histórico</div></div>
     <div class="card"><div class="k">Egresos</div><div class="v red">${fmt0(egr)}</div><div class="note">acumulado histórico</div></div>
@@ -624,11 +626,11 @@ function renderDash(){
   // Dudas
   const dudas=DB.movimientos.filter(m=>m.proyecto==="Por clasificar");
   document.getElementById('dudasSec').style.display=dudas.length?"block":"none";
-  const ops=[...new Set([...DB.bolsas.map(b=>b.nombre),...DB.movimientos.map(m=>m.proyecto)])].filter(n=>n&&n!=="Por clasificar").map(n=>`<option>${n}</option>`).join("")+'<option value="__nueva__">➕ Crear bolsa nueva…</option>';
+  const ops=[...new Set([...DB.bolsas.map(b=>b.nombre),...DB.movimientos.map(m=>m.proyecto)])].filter(n=>n&&n!=="Por clasificar").map(n=>`<option>${escHtml(n)}</option>`).join("")+'<option value="__nueva__">➕ Crear bolsa nueva…</option>';
   document.getElementById('dudas').innerHTML=dudas.map(m=>`
-    <div class="duda"><b>${m.fecha.slice(5)}</b> ${m.beneficiario} — <b class="red">${fmt(m.monto)}</b> <span class="muted">${m.notas||""}</span>
-    <span style="margin-left:auto">→ <select id="duda-${m.id}"><option value="">Elegir bolsa…</option>${ops}</select>
-    <button class="linklike" onclick="resolverDuda('${m.id}')">Acomodar</button></span></div>`).join("");
+    <div class="duda"><b>${escHtml(m.fecha.slice(5))}</b> ${escHtml(m.beneficiario)} — <b class="red">${fmt(m.monto)}</b> <span class="muted">${escHtml(m.notas)}</span>
+    <span style="margin-left:auto">→ <select id="duda-${escHtml(m.id)}"><option value="">Elegir bolsa…</option>${ops}</select>
+    <button class="linklike" data-mov-id="${escHtml(m.id)}" onclick="resolverDuda(this.dataset.movId)">Acomodar</button></span></div>`).join("");
 
   // Bolsas con salud
   const bs=bolsasCalc();
@@ -638,17 +640,17 @@ function renderDash(){
       : b.comprometido>b.resta ? `Compromisos ${fmt0(b.comprometido)} > fondo`
       : b.dias!==null ? `~${b.dias} días al ritmo actual`
       : b.egr14>0 ? "Gasto reciente, fondo aguanta" : "Sin gasto reciente";
-    return `<div class="bolsa h-${b.salud}" onclick="verBolsa('${b.nombre.replace(/'/g,"\\'")}')">
+    return `<div class="bolsa h-${b.salud}" data-bolsa="${escHtml(b.nombre)}" onclick="verBolsa(this.dataset.bolsa)">
       <div class="top"></div>
       <div class="body">
         ${donut(b.pct,col,b.resta<0)}
         <div>
-          <div class="nm">${b.nombre} ${b.nombre==="Por clasificar"?"⚠":""}</div>
+          <div class="nm">${escHtml(b.nombre)} ${b.nombre==="Por clasificar"?"⚠":""}</div>
           <div class="rest" style="color:${b.resta<0?'var(--red)':'inherit'}">${fmt0(b.resta)}</div>
           <span class="estado ${b.salud==='critica'?'pulse':''}">${icon} ${txt}</span>
         </div>
       </div>
-      <div class="det">🧭 ${norte}<br>↓ ${fmt0(b.total)} · ↑ ${fmt0(b.egr)}${b.comprometido?` · ⏳ ${fmt0(b.comprometido)}`:""}${b.resta<0?`<br><button class="linklike" style="color:var(--red);font-weight:700" onclick="event.stopPropagation();openTransfer('${b.nombre.replace(/'/g,"\\'")}')">⇄ Cubrir con traslado</button>`:""}</div>
+      <div class="det">🧭 ${norte}<br>↓ ${fmt0(b.total)} · ↑ ${fmt0(b.egr)}${b.comprometido?` · ⏳ ${fmt0(b.comprometido)}`:""}${b.resta<0?`<br><button class="linklike" style="color:var(--red);font-weight:700" data-bolsa="${escHtml(b.nombre)}" onclick="event.stopPropagation();openTransfer(this.dataset.bolsa)">⇄ Cubrir con traslado</button>`:""}</div>
     </div>`;
   }).join("");
 
@@ -666,9 +668,9 @@ function renderDash(){
   // Alertas
   const alertas=[];
   if(DB.saldo.monto<comp) alertas.push(`<div class="alerta">El saldo (${fmt0(DB.saldo.monto)}) no cubre lo comprometido (${fmt0(comp)}). <b>Falta ingresar ${fmt0(comp-DB.saldo.monto)}</b>.</div>`);
-  bs.filter(b=>b.resta<0&&b.nombre!=="Por clasificar").forEach(b=>alertas.push(`<div class="alerta">Bolsa <b>${b.nombre}</b> en negativo: ${fmt0(b.resta)} — ha salido más de lo que entró.</div>`));
+  bs.filter(b=>b.resta<0&&b.nombre!=="Por clasificar").forEach(b=>alertas.push(`<div class="alerta">Bolsa <b>${escHtml(b.nombre)}</b> en negativo: ${fmt0(b.resta)} — ha salido más de lo que entró.</div>`));
   if(dudas.length) alertas.push(`<div class="alerta">${dudas.length} movimientos sin bolsa (arriba en "Dudas").</div>`);
-  DB.ingresosEsperados.filter(i=>i.estatus!=="Cobrado").forEach(i=>alertas.push(`<div class="alerta ok">Ingreso esperado: <b>${i.concepto}</b> ${fmt0(i.monto)} (${i.estatus}).</div>`));
+  DB.ingresosEsperados.filter(i=>i.estatus!=="Cobrado").forEach(i=>alertas.push(`<div class="alerta ok">Ingreso esperado: <b>${escHtml(i.concepto)}</b> ${fmt0(i.monto)} (${escHtml(i.estatus)}).</div>`));
   document.getElementById('alertas').innerHTML=alertas.join("")||'<p class="muted">Sin alertas.</p>';
 }
 
@@ -747,9 +749,9 @@ function renderSaldoChart(){
   el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" style="width:100%">
     <polyline points="${pts}" fill="none" stroke="#c9a96e" stroke-width="2.5" stroke-linejoin="round"/>
     <polygon points="${x(0)},${H-P} ${pts} ${x(S.length-1)},${H-P}" fill="#c9a96e22"/>
-    ${S.map((s,i)=>`<circle cx="${x(i)}" cy="${y(s.monto)}" r="3.5" fill="#c9a96e"><title>${s.ts}: ${fmt(s.monto)}</title></circle>
+    ${S.map((s,i)=>`<circle cx="${x(i)}" cy="${y(s.monto)}" r="3.5" fill="#c9a96e"><title>${escHtml(s.ts)}: ${fmt(s.monto)}</title></circle>
       <text x="${x(i)}" y="${y(s.monto)-8}" text-anchor="middle" font-size="9" fill="var(--muted)">${fmt0(s.monto).replace("$","$")}</text>
-      <text x="${x(i)}" y="${H-P+13}" text-anchor="middle" font-size="8.5" fill="var(--muted)">${s.ts.slice(5,10)}</text>`).join("")}
+      <text x="${x(i)}" y="${H-P+13}" text-anchor="middle" font-size="8.5" fill="var(--muted)">${escHtml(s.ts.slice(5,10))}</text>`).join("")}
   </svg>`;
 }
 
@@ -760,17 +762,18 @@ async function resolverDuda(id){
   const m=DB.movimientos.find(x=>x.id===id); if(!m) return;
   // Confirmar con el servidor ANTES de tocar la base local: sin fantasmas si falla.
   try{ await api("updateMovimiento",{id,patch:{proyecto:destino},usuario:quien()}); }
-  catch(e){ fToast("No se acomodó ("+e.message+"). Sigue en Dudas — reintenta.",1); return; }
+  catch(e){ fToast("No se pudo confirmar la asignación ("+e.message+"). Actualiza y revisa antes de repetir.",1); return; }
   m.proyecto=destino;
   DB.historial.unshift({ts:new Date().toISOString().slice(0,16).replace("T"," "),usuario:quien(),accion:"Acomodó duda",detalle:`${m.beneficiario} ${fmt(m.monto)} → ${destino}`});
   renderAll();
 }
 
 const TRANSFER_TAG="«Transferencia»";
+let transferenciaEnCurso=false;
 function esTransfer(m){ return String(m.notas||"").indexOf(TRANSFER_TAG)===0 || String(m.beneficiario||"").charAt(0)==="⇄"; }
 function openTransfer(destinoPre){
   const proys=[...new Set([...DB.bolsas.map(b=>b.nombre),...DB.movimientos.map(m=>m.proyecto)])].filter(p=>p&&p!=="");
-  const opts=proys.map(p=>`<option>${p}</option>`).join("");
+  const opts=proys.map(p=>`<option>${escHtml(p)}</option>`).join("");
   document.getElementById('trOrigen').innerHTML=opts;
   document.getElementById('trDestino').innerHTML=opts;
   if(destinoPre&&typeof destinoPre==="string"){ document.getElementById('trDestino').value=destinoPre; }
@@ -781,6 +784,7 @@ function openTransfer(destinoPre){
   document.getElementById('mTransfer').classList.add('open');
 }
 async function saveTransfer(){
+  if(transferenciaEnCurso)return;
   const origen=document.getElementById('trOrigen').value, destino=document.getElementById('trDestino').value;
   const monto=+document.getElementById('trMonto').value, fecha=document.getElementById('trFecha').value, con=document.getElementById('trConcepto').value.trim(), prestador=document.getElementById('trQuien').value.trim();
   if(!monto||monto<=0){fToast("Pon un monto válido",1);return}
@@ -788,19 +792,30 @@ async function saveTransfer(){
   const ts=Date.now(), suf=(con?(" — "+con):"")+(prestador?(" [presta: "+prestador+"]"):"");
   const egr={id:"M-"+ts+"-o",tipo:"Egreso",fecha:fecha,monto:monto,beneficiario:"⇄ "+destino,proyecto:origen,notas:TRANSFER_TAG+" a "+destino+suf+" #T"+ts};
   const ing={id:"M-"+ts+"-d",tipo:"Ingreso",fecha:fecha,monto:monto,beneficiario:"⇄ "+origen,proyecto:destino,notas:TRANSFER_TAG+" de "+origen+suf+" #T"+ts};
+  const boton=document.getElementById('trGuardar'), estado=document.getElementById('trEstado');
+  transferenciaEnCurso=true;boton.disabled=true;estado.textContent="Confirmando transferencia…";
+  let egresoConfirmado=false;
   // Confirmar ambas patas con el servidor antes de tocar la base local.
-  try{ await api("addMovimiento",{mov:egr,usuario:quien()}); await api("addMovimiento",{mov:ing,usuario:quien()}); }
-  catch(e){ fToast("No se guardó la transferencia ("+e.message+").",1); return; }
+  try{
+    await api("addMovimiento",{mov:egr,usuario:quien()});egresoConfirmado=true;
+    await api("addMovimiento",{mov:ing,usuario:quien()});
+  }catch(e){
+    const aviso=egresoConfirmado
+      ? "El egreso está confirmado; no se pudo confirmar el ingreso."
+      : "No se pudo confirmar la transferencia; puede haber quedado un movimiento registrado.";
+    estado.textContent=aviso+" Referencia #T"+ts+". Actualiza y revisa Movimientos antes de volver a transferir. Detalle: "+e.message;
+    fToast(aviso+" Revisa el detalle en la transferencia.",1);return;
+  }finally{transferenciaEnCurso=false;boton.disabled=false;}
   DB.movimientos.push(egr,ing);
   DB.historial.unshift({ts:now(),usuario:quien(),accion:"Transferencia",detalle:`${fmt(monto)} ${origen} → ${destino}`});
+  estado.textContent="Transferencia confirmada. Referencia #T"+ts+".";
   closeM('mTransfer'); renderAll(); fToast("✓ Transferencia registrada");
 }
 function openUnify(){
   const proys=[...new Set([...DB.bolsas.map(b=>b.nombre),...DB.movimientos.map(m=>m.proyecto)])].filter(p=>p&&p!=="");
   const cnt={}; DB.movimientos.forEach(m=>{cnt[m.proyecto]=(cnt[m.proyecto]||0)+1;});
-  const esc=t=>String(t).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");
   const raro=p=>(/\s{2,}|^\s|\s$/.test(p))?" ⚠espacios":"";
-  const opts=proys.map(p=>`<option value="${esc(p)}">${esc(p)} — ${cnt[p]||0} mov${raro(p)}</option>`).join("");
+  const opts=proys.map(p=>`<option value="${escHtml(p)}">${escHtml(p)} — ${cnt[p]||0} mov${raro(p)}</option>`).join("");
   document.getElementById('unOrigen').innerHTML=opts;
   document.getElementById('unDestino').innerHTML=opts;
   document.getElementById('mUnify').classList.add('open');
@@ -811,7 +826,7 @@ async function saveUnify(){
   if(origen===destino){fToast("Deben ser bolsas distintas",1);return}
   if(!confirm("\u00bfFusionar \u00ab"+origen+"\u00bb en \u00ab"+destino+"\u00bb? Todos sus movimientos pasar\u00e1n a \u00ab"+destino+"\u00bb y la bolsa \u00ab"+origen+"\u00bb se eliminar\u00e1.")) return;
   try{ const r=await api("mergeBolsa",{origen:origen,destino:destino,usuario:quien()}); closeM('mUnify'); await loadAll(); fToast("\u2713 "+(r.reasignados||0)+" movimientos reasignados a \u00ab"+destino+"\u00bb."); }
-  catch(e){ fToast("No se pudo fusionar ("+e.message+").",1); }
+  catch(e){ fToast("No se pudo confirmar la fusión ("+e.message+"). Actualiza y revisa antes de repetir.",1); }
 }
 function openPrestamos(){
   const movs=(DB.movimientos||[]); const pairs={};
@@ -831,7 +846,7 @@ function openPrestamos(){
   });
   filas.sort((x,y)=>y.monto-x.monto);
   const html=filas.length
-    ? "<table><tr><th>Prestó</th><th></th><th>Recibió</th><th style='text-align:right'>Neto</th></tr>"+filas.map(f=>`<tr><td><b>${f.de}</b></td><td>→</td><td>${f.a}</td><td style='text-align:right' class='red'>${fmt(f.monto)}</td></tr>`).join("")+"</table><div class='muted' style='margin-top:.5rem;font-size:.8rem'>Neto = cuánto le debe la bolsa que recibió a la que prestó.</div>"
+    ? "<table><tr><th>Prestó</th><th></th><th>Recibió</th><th style='text-align:right'>Neto</th></tr>"+filas.map(f=>`<tr><td><b>${escHtml(f.de)}</b></td><td>→</td><td>${escHtml(f.a)}</td><td style='text-align:right' class='red'>${fmt(f.monto)}</td></tr>`).join("")+"</table><div class='muted' style='margin-top:.5rem;font-size:.8rem'>Neto = cuánto le debe la bolsa que recibió a la que prestó.</div>"
     : "<div class='muted'>Aún no hay traslados entre bolsas registrados.</div>";
   document.getElementById('prBody').innerHTML=html;
   document.getElementById('mPrestamos').classList.add('open');
@@ -843,7 +858,7 @@ function verBolsa(nombre){
   const entradas=movs.filter(m=>m.tipo==="Ingreso"), salidas=movs.filter(m=>m.tipo==="Egreso");
   const sumE=entradas.reduce((s,m)=>s+ +m.monto,0), sumS=salidas.reduce((s,m)=>s+ +m.monto,0);
   const transIn=entradas.filter(esTransfer).reduce((s,m)=>s+ +m.monto,0), transOut=salidas.filter(esTransfer).reduce((s,m)=>s+ +m.monto,0);
-  const row=m=>`<tr><td class="muted" style="white-space:nowrap">${m.fecha.slice(5)}</td><td>${esTransfer(m)?'<span class="muted">⇄ </span>':""}${m.beneficiario||""}</td><td style="text-align:right;white-space:nowrap">${fmt(m.monto)}</td></tr>`;
+  const row=m=>`<tr><td class="muted" style="white-space:nowrap">${escHtml(m.fecha.slice(5))}</td><td>${esTransfer(m)?'<span class="muted">⇄ </span>':""}${escHtml(m.beneficiario)}</td><td style="text-align:right;white-space:nowrap">${fmt(m.monto)}</td></tr>`;
   document.getElementById('bBody').innerHTML=`
     <div class="cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:.7rem">
       <div class="card"><div class="k">Entró (Debe)</div><div class="v green">${fmt0(b.presupuesto+sumE)}</div></div>
@@ -884,17 +899,17 @@ function renderMovs(){
     rows.map(m=>{
       const f=(m.facturado||"").toString();
       const fc=f==="Sí"?["si","✓ Facturado"]:f==="No"?["no","Sin factura"]:["pend","¿Factura?"];
-      return `<tr><td>${m.fecha}</td><td><span class="pill ${m.tipo==="Ingreso"?"in":"out"}">${m.tipo}</span></td>
-    <td class="${m.tipo==="Ingreso"?"green":"red"}">${fmt(m.monto)}</td><td>${m.beneficiario}</td><td>${m.proyecto}</td>
-    <td><button class="fact ${fc[0]}" title="Pica para cambiar: ¿Factura? → ✓ Facturado → Sin factura" onclick="toggleFact('${m.id}')">${fc[1]}</button></td>
-    <td class="muted">${m.notas||""}</td><td><button class="linklike" onclick="openMov('${m.id}')">editar</button></td></tr>`}).join("");
+      return `<tr><td>${escHtml(m.fecha)}</td><td><span class="pill ${m.tipo==="Ingreso"?"in":"out"}">${escHtml(m.tipo)}</span></td>
+    <td class="${m.tipo==="Ingreso"?"green":"red"}">${fmt(m.monto)}</td><td>${escHtml(m.beneficiario)}</td><td>${escHtml(m.proyecto)}</td>
+    <td><button class="fact ${fc[0]}" title="Pica para cambiar: ¿Factura? → ✓ Facturado → Sin factura" data-mov-id="${escHtml(m.id)}" onclick="toggleFact(this.dataset.movId)">${fc[1]}</button></td>
+    <td class="muted">${escHtml(m.notas)}</td><td><button class="linklike" data-mov-id="${escHtml(m.id)}" onclick="openMov(this.dataset.movId)">editar</button></td></tr>`}).join("");
 }
 async function toggleFact(id){
   const m=DB.movimientos.find(x=>x.id===id); if(!m) return;
   const next=m.facturado==="Sí"?"No":m.facturado==="No"?"":"Sí";
   // Confirmar con el servidor ANTES de tocar la base local: sin fantasmas si falla.
   try{ await api("updateMovimiento",{id,patch:{facturado:next},usuario:quien()}); }
-  catch(e){ fToast("No se guardó el cambio de factura ("+e.message+"). Sigue igual — reintenta.",1); return; }
+  catch(e){ fToast("No se pudo confirmar el cambio de factura ("+e.message+"). Actualiza y revisa antes de repetir.",1); return; }
   m.facturado=next;
   renderMovs();
 }
@@ -924,17 +939,17 @@ function renderPlan(){
     const ordenados=[...g.pagos].sort((a,b)=>({Alta:0,Media:1,Baja:2}[a.prioridad]-{Alta:0,Media:1,Baja:2}[b.prioridad])||a.fechaLimite.localeCompare(b.fechaLimite));
     let acum=0;
     return `<div class="mes-block">
-      <div class="mes-head"><span>${mesDe(k+"-01")}</span>
+      <div class="mes-head"><span>${escHtml(mesDe(k+"-01"))}</span>
         <span class="stats"><span>A pagar: <b class="red">${fmt0(tp)}</b></span><span>Esperado: <b class="green">${fmt0(ti)}</b></span>
         <span>Saldo proyectado fin de mes: <b class="${saldoCorr<0?'red':'green'}">${fmt0(saldoCorr)}</b></span>
         ${necesita>0?`<span class="red"><b>Debe ingresar ${fmt0(necesita)}</b></span>`:""}</span></div>
       <table><tr><th>#</th><th>Concepto</th><th>Monto</th><th>Acumulado</th><th>Límite</th><th>Tipo</th><th>Prioridad</th><th>Bolsa</th><th>¿Alcanza?</th><th></th></tr>
       ${ordenados.map((p,i)=>{acum+=+p.monto;const ok=acum<=saldoIni+ti;
-        return `<tr><td>${i+1}</td><td>${p.concepto}</td><td>${fmt0(p.monto)}</td><td>${fmt0(acum)}</td><td>${p.fechaLimite.slice(5)}</td>
-        <td><span class="pill ${p.tipoPago.toLowerCase()}">${p.tipoPago}</span></td><td><span class="pill ${p.prioridad.toLowerCase()}">${p.prioridad}</span></td>
-        <td class="muted">${p.proyecto}</td><td class="${ok?'green':'red'}">${ok?"✔ Pagable":"✘ Falta "+fmt0(acum-saldoIni-ti)}</td>
-        <td><button class="linklike" onclick="marcarPagado('${p.id}')">pagado ✔</button></td></tr>`}).join("")}
-      ${g.ing.length?`<tr><td colspan="10" style="background:rgba(143,191,139,.08)"><b>Ingresos esperados:</b> ${g.ing.map(i=>`${i.concepto} <b class="green">${fmt0(i.monto)}</b> (${i.estatus})`).join(" · ")}</td></tr>`:""}
+        return `<tr><td>${i+1}</td><td>${escHtml(p.concepto)}</td><td>${fmt0(p.monto)}</td><td>${fmt0(acum)}</td><td>${escHtml(p.fechaLimite.slice(5))}</td>
+        <td><span class="pill ${escHtml(p.tipoPago.toLowerCase())}">${escHtml(p.tipoPago)}</span></td><td><span class="pill ${escHtml(p.prioridad.toLowerCase())}">${escHtml(p.prioridad)}</span></td>
+        <td class="muted">${escHtml(p.proyecto)}</td><td class="${ok?'green':'red'}">${ok?"✔ Pagable":"✘ Falta "+fmt0(acum-saldoIni-ti)}</td>
+        <td><button class="linklike" data-pago-id="${escHtml(p.id)}" onclick="marcarPagado(this.dataset.pagoId)">pagado ✔</button></td></tr>`}).join("")}
+      ${g.ing.length?`<tr><td colspan="10" style="background:rgba(143,191,139,.08)"><b>Ingresos esperados:</b> ${g.ing.map(i=>`${escHtml(i.concepto)} <b class="green">${fmt0(i.monto)}</b> (${escHtml(i.estatus)})`).join(" · ")}</td></tr>`:""}
       </table></div>`;
   }).join("")||'<p class="muted">Sin pagos planificados. Pica "+ Pago planificado".</p>';
 }
@@ -946,7 +961,7 @@ async function marcarPagado(id){
   const mov={id:"M-"+Date.now(),fecha:hoy,tipo:"Egreso",monto:p.monto,beneficiario:p.concepto,proyecto:p.proyecto,notas:"Desde planificación"};
   // Confirmar con el servidor ANTES de tocar la base local: sin fantasmas si falla.
   try{ await api("pagoRealizado",{id,mov,usuario:quien()}); }
-  catch(e){ fToast("No se marcó como pagado ("+e.message+"). Sigue pendiente — reintenta.",1); return; }
+  catch(e){ fToast("No se pudo confirmar el pago ("+e.message+"). Actualiza y revisa antes de repetir.",1); return; }
   p.estado="Pagado";
   DB.movimientos.push(mov);
   if(p.tipoPago!=="Único"){ // recurrente/fijo: crear el del mes siguiente
@@ -959,7 +974,7 @@ async function marcarPagado(id){
 
 function renderHist(){
   document.getElementById('tHist').innerHTML=`<tr><th>Fecha/hora</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr>`+
-  DB.historial.map(h=>`<tr><td>${h.ts}</td><td>${h.usuario}</td><td>${h.accion}</td><td>${h.detalle}</td></tr>`).join("");
+  DB.historial.map(h=>`<tr><td>${escHtml(h.ts)}</td><td>${escHtml(h.usuario)}</td><td>${escHtml(h.accion)}</td><td>${escHtml(h.detalle)}</td></tr>`).join("");
 }
 
 // ===================== MODALES =====================
@@ -993,14 +1008,14 @@ async function saveMov(){
       DB.movimientos.push(obj);
       DB.historial.unshift({ts:now(),usuario:quien(),accion:"Alta movimiento",detalle:`${obj.tipo} ${fmt(obj.monto)} ${obj.beneficiario} → ${obj.proyecto}`});
     }
-  }catch(e){ fToast("No se guardó ("+e.message+"). No quedó ningún registro — reintenta.",1); return; }
+  }catch(e){ fToast("No se pudo confirmar el guardado ("+e.message+"). Actualiza y revisa antes de repetir.",1); return; }
   closeM('mMov'); renderAll(); fToast("✓ Movimiento guardado");
 }
 function openPago(){pgCon.value="";pgMonto.value="";pgFecha.value="";document.getElementById('mPago').classList.add('open')}
 async function savePago(){
   const obj={id:"P-"+Date.now(),concepto:pgCon.value,monto:+pgMonto.value,fechaLimite:pgFecha.value,tipoPago:pgTipo.value,prioridad:pgPrio.value,proyecto:pgProy.value,estado:"Pendiente"};
   if(!obj.concepto||!obj.monto||!obj.fechaLimite){fToast("Faltan datos",1);return}
-  try{await api("addPago",{pago:obj,usuario:quien()})}catch(e){fToast("No se guardó ("+e.message+"). Nada quedó registrado.",1);return}
+  try{await api("addPago",{pago:obj,usuario:quien()})}catch(e){fToast("No se pudo confirmar el guardado ("+e.message+"). Actualiza y revisa antes de repetir.",1);return}
   DB.pagos.push(obj);
   DB.historial.unshift({ts:now(),usuario:quien(),accion:"Pago planificado",detalle:`${obj.concepto} ${fmt(obj.monto)} (${obj.tipoPago})`});
   closeM('mPago'); renderAll(); fToast("✓ Pago planificado");
@@ -1009,7 +1024,7 @@ function openIngreso(){igCon.value="";igMonto.value="";igFecha.value="";document
 async function saveIngreso(){
   const obj={id:"I-"+Date.now(),concepto:igCon.value,monto:+igMonto.value,fechaEsperada:igFecha.value,estatus:igEst.value,proyecto:igProy.value};
   if(!obj.concepto||!obj.monto||!obj.fechaEsperada){fToast("Faltan datos",1);return}
-  try{await api("addIngreso",{ingreso:obj,usuario:quien()})}catch(e){fToast("No se guardó ("+e.message+"). Nada quedó registrado.",1);return}
+  try{await api("addIngreso",{ingreso:obj,usuario:quien()})}catch(e){fToast("No se pudo confirmar el guardado ("+e.message+"). Actualiza y revisa antes de repetir.",1);return}
   DB.ingresosEsperados.push(obj);
   DB.historial.unshift({ts:now(),usuario:quien(),accion:"Ingreso esperado",detalle:`${obj.concepto} ${fmt(obj.monto)}`});
   closeM('mIng'); renderAll(); fToast("✓ Ingreso registrado");
@@ -1045,10 +1060,10 @@ function buscarChat(q){
   const term=q.toLowerCase().split(/\s+/).filter(w=>w.length>2);
   return fuenteTodo().map(m=>{const t=(m.t+" "+m.q).toLowerCase();let sc=0;term.forEach(w=>{if(t.includes(w))sc++});return {m,sc}}).filter(x=>x.sc>0).sort((a,b)=>b.sc-a.sc).slice(0,20).map(x=>x.m);
 }
-function citasHTML(arr){return arr.map(m=>"<div class=ai-cita><span class=meta>"+m.f+" · "+m.q+":</span> "+m.t.replace(/</g,"&lt;")+"</div>").join("")}
+function citasHTML(arr){return arr.map(m=>"<div class=ai-cita><span class=meta>"+escHtml(m.f)+" · "+escHtml(m.q)+":</span> "+escHtml(m.t)+"</div>").join("")}
 async function aiAsk(){
   const inp=document.getElementById("aiInput");const q=inp.value.trim();if(!q)return;inp.value="";
-  aiAdd(q.replace(/</g,"&lt;"),"ai-user");
+  aiAdd(escHtml(q),"ai-user");
   if(aiModo==="buscar"){
     const r=buscarChat(q);
     aiAdd(r.length?("<b>"+r.length+"</b> registros mencionan eso:"+citasHTML(r)):"No encontré nada con esos términos.","ai-bot");
@@ -1060,9 +1075,9 @@ async function aiAsk(){
   const rel=buscarChat(q);
   try{
     const j=await api("ai",{prompt:q,contexto:ctx,unlock:aiUnlock,historial:aiHistory.slice(-10)});
-    if(j.answer){const badge=j.premium?" <span style='font-size:.62rem;color:#c9a96e;font-weight:700'>· 5.5 Pro</span>":"";th.innerHTML=j.answer.replace(/</g,"&lt;").replace(/\*\*(.+?)\*\*/g,"<b>$1</b>")+badge+(rel.length?("<div style=margin-top:.5rem;font-size:.7rem;color:#8a8780>Mensajes que usé:</div>"+citasHTML(rel.slice(0,5))):"");
+    if(j.answer){const badge=j.premium?" <span style='font-size:.62rem;color:#c9a96e;font-weight:700'>· 5.5 Pro</span>":"";th.innerHTML=escHtml(j.answer).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>")+badge+(rel.length?("<div style=margin-top:.5rem;font-size:.7rem;color:#8a8780>Mensajes que usé:</div>"+citasHTML(rel.slice(0,5))):"");
       aiHistory.push({role:"user",content:q},{role:"assistant",content:j.answer}); if(aiHistory.length>10) aiHistory=aiHistory.slice(-10);}
-    else th.innerHTML="No pude generar respuesta: "+(j.error||"?")+". Prueba el modo «Búsqueda exacta».";
+    else th.textContent="No pude generar respuesta: "+(j.error||"?")+". Prueba el modo «Búsqueda exacta».";
   }catch(e){th.innerHTML="Error de conexión con la IA. Usa «Búsqueda exacta» mientras tanto.";}
 }
 
@@ -1074,6 +1089,6 @@ else{loadAll()}
 </script>
 <!-- Portero YOD: liga mágica / clave de equipo / Google + bitácora -->
 <script src="https://yodesarrollomx.github.io/potenciales-yod/portero.js"></script>
-<script src="https://yodesarrollomx.github.io/yod-portal/os/shell.js"></script>
+<script src="https://yodesarrollomx.github.io/yod-portal/os/shell.js?v=audit-20260930"></script>
 </body>
 </html>
