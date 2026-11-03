@@ -71,6 +71,8 @@ tr:hover td{background:rgba(255,255,255,.03)}
 .h-riesgo .estado{background:rgba(224,129,90,.18);color:var(--sem-riesgo)}.h-critica .estado{background:rgba(224,96,90,.18);color:var(--sem-critica)}
 .bolsa .det{font-size:.66rem;color:var(--muted);margin:.45rem .9rem 0;line-height:1.6;border-top:1px dashed var(--line);padding-top:.4rem}
 .donut{flex:none}
+.sync-vieja{color:var(--red);font-weight:700}
+.sin-ppto{font-size:.72rem;color:var(--muted)}
 .donut text{font-weight:700;font-size:11px;fill:var(--ink)}
 .pulse{animation:pul 1.6s ease-in-out infinite}
 @keyframes pul{0%,100%{opacity:1}50%{opacity:.45}}
@@ -501,14 +503,14 @@ async function loadAll(){
     if((!DB.mensajes||!DB.mensajes.length) && (typeof CHAT_DATA!=="undefined"&&CHAT_DATA.length)){
       try{ await api("seedMensajes",{mensajes:CHAT_DATA}); const d2=await api("getAll"); DB=d2.data; }catch(e){}
     }
-    document.getElementById('syncInfo').textContent = "Sync: " + new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+    syncBase = "Sync: " + new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
     renderAll();
   }catch(e){
     try{
       DB = await cargarRespaldoLocal();
       var b=document.getElementById('demoBanner');
       if(b){ b.textContent="Modo consulta · respaldo local (el servidor no está disponible por ahora). Los datos son la última foto; no se pueden editar hasta reconectar."; b.style.display='block'; }
-      var s=document.getElementById('syncInfo'); if(s) s.textContent="Respaldo local";
+      syncBase="Respaldo local";
       renderAll();
     }catch(e2){
       // Sin llave no se abre el respaldo: eso es lo correcto, no una falla.
@@ -531,11 +533,36 @@ function escHtml(value){return String(value==null?'':value).replace(/[&<>"']/g,c
 const fmt = n => "$"+Number(n).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmt0 = n => "$"+Math.round(Number(n)).toLocaleString('es-MX');
 const mesDe = f => { const d=f.slice(0,7).split("-"); return MESES[+d[1]-1]+" "+d[0]; };
+// Filtro único de movimientos vigentes: excluye los marcados `borrada` (true, "TRUE" o "true"). Nada se borra del Sheet; solo se deja de contar.
+function esBorrada(m){ const v=m&&m.borrada; return v===true||(v!=null&&String(v).trim().toLowerCase()==="true"); }
+function movsVivos(){ return (DB.movimientos||[]).filter(m=>!esBorrada(m)); }
+// Frescura: días desde el último movimiento vigente. Acepta "YYYY-MM-DD", ISO o Date; `hoy` es opcional (pruebas).
+function _diaUTC(v){
+  if(v instanceof Date){ return isNaN(v)?null:Date.UTC(v.getFullYear(),v.getMonth(),v.getDate()); }
+  const x=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(v==null?"":v).trim());
+  return x?Date.UTC(+x[1],+x[2]-1,+x[3]):null;
+}
+function diasDesdeUltimoMov(hoy){
+  let max=null; movsVivos().forEach(m=>{ const t=_diaUTC(m.fecha); if(t!==null&&(max===null||t>max)) max=t; });
+  const h=_diaUTC(hoy===undefined?new Date():hoy);
+  if(max===null||h===null) return null;
+  return Math.max(0,Math.round((h-max)/864e5));
+}
+function textoFrescura(hoy){
+  const n=diasDesdeUltimoMov(hoy); if(n===null) return null;
+  return {dias:n,alerta:n>3,texto:"· último movimiento "+(n===0?"hoy":n===1?"hace 1 día":"hace "+n+" días")};
+}
+let syncBase="";
+function pintarSync(hoy){
+  const el=document.getElementById('syncInfo'); if(!el||!syncBase) return;
+  const f=textoFrescura(hoy);
+  el.innerHTML=escHtml(syncBase)+(f?' <span class="'+(f.alerta?'sync-vieja':'')+'">'+escHtml(f.texto)+'</span>':'');
+}
 function bolsasCalc(){
   const map = {};
   DB.bolsas.forEach(b=>map[b.nombre]={nombre:b.nombre,presupuesto:+b.presupuesto||0,ing:0,egr:0,egr14:0,movs:[]});
   const hace14=new Date(Date.now()-14*864e5).toISOString().slice(0,10);
-  DB.movimientos.forEach(m=>{
+  movsVivos().forEach(m=>{
     if(!map[m.proyecto]) map[m.proyecto]={nombre:m.proyecto,presupuesto:0,ing:0,egr:0,egr14:0,movs:[]};
     const b=map[m.proyecto]; b.movs.push(m);
     if(m.tipo==="Ingreso") b.ing+=+m.monto; else { b.egr+=+m.monto; if(m.fecha>=hace14) b.egr14+=+m.monto; }
@@ -543,6 +570,7 @@ function bolsasCalc(){
   Object.values(map).forEach(b=>{
     b.resta=b.presupuesto+b.ing-b.egr;
     b.total=b.presupuesto+b.ing;
+    b.sinPresupuesto=b.presupuesto===0;
     b.pct=b.total>0?Math.max(0,Math.min(100,b.resta/b.total*100)):0;
     b.burn=b.egr14/14;
     b.dias=b.burn>0&&b.resta>0?Math.round(b.resta/b.burn):null;
@@ -556,17 +584,17 @@ function bolsasCalc(){
 }
 const SALUD_TXT={sana:["●","Sana"],atencion:["●","Atención"],riesgo:["●","En riesgo"],critica:["●","Crítica"]};
 const SALUD_COL={sana:"#8FBF8B",atencion:"#D9A45B",riesgo:"#E0815A",critica:"#E0605A"};
-function donut(pct,color,neg){
+function donut(pct,color,neg,sinPpto){
   const r=20,c=2*Math.PI*r,off=c*(1-Math.max(0,Math.min(100,pct))/100);
   return `<svg class="donut" width="52" height="52" viewBox="0 0 52 52">
     <circle cx="26" cy="26" r="${r}" fill="none" stroke="var(--line)" stroke-width="6"/>
     <circle cx="26" cy="26" r="${r}" fill="none" stroke="${color}" stroke-width="6" stroke-linecap="round"
       stroke-dasharray="${c}" stroke-dashoffset="${off}" transform="rotate(-90 26 26)" style="transition:stroke-dashoffset .6s"/>
-    <text x="26" y="30" text-anchor="middle">${neg?"!":Math.round(pct)+"%"}</text></svg>`;
+    <text x="26" y="30" text-anchor="middle">${neg?"!":sinPpto?"—":Math.round(pct)+"%"}</text></svg>`;
 }
 function diasDeCaja(){
   const hace14=new Date(Date.now()-14*864e5).toISOString().slice(0,10);
-  const egr14=DB.movimientos.filter(m=>m.tipo==="Egreso"&&!esTransfer(m)&&m.fecha>=hace14).reduce((s,m)=>s+ +m.monto,0);
+  const egr14=movsVivos().filter(m=>m.tipo==="Egreso"&&!esTransfer(m)&&m.fecha>=hace14).reduce((s,m)=>s+ +m.monto,0);
   const burn=egr14/14;
   return burn>0?Math.round(DB.saldo.monto/burn):null;
 }
@@ -574,16 +602,16 @@ function conciliacion(){
   if(!DB.saldos||DB.saldos.length<1) return null;
   const last=DB.saldos[DB.saldos.length-1];
   const fechaCorte=last.ts.slice(0,10);
-  const net=DB.movimientos.filter(m=>m.fecha<=fechaCorte).reduce((s,m)=>s+(m.tipo==="Ingreso"?+m.monto:-+m.monto),0);
+  const net=movsVivos().filter(m=>m.fecha<=fechaCorte).reduce((s,m)=>s+(m.tipo==="Ingreso"?+m.monto:-+m.monto),0);
   const first=DB.saldos[0];
-  const netHastaPrimero=DB.movimientos.filter(m=>m.fecha<=first.ts.slice(0,10)).reduce((s,m)=>s+(m.tipo==="Ingreso"?+m.monto:-+m.monto),0);
+  const netHastaPrimero=movsVivos().filter(m=>m.fecha<=first.ts.slice(0,10)).reduce((s,m)=>s+(m.tipo==="Ingreso"?+m.monto:-+m.monto),0);
   const base=first.monto-netHastaPrimero; // saldo inicial implícito
   const esperado=base+net;
   return {esperado, reportado:last.monto, dif:last.monto-esperado, fecha:last.ts};
 }
 
 // ===================== RENDER =====================
-function renderAll(){ fillSelects(); renderDash(); renderMovs(); renderPlan(); renderHist(); }
+function renderAll(){ fillSelects(); renderDash(); renderMovs(); renderPlan(); renderHist(); pintarSync(); }
 
 async function nuevaBolsa(sel){
   const nombre=(prompt("Nombre de la bolsa nueva:")||"").trim();
@@ -611,8 +639,8 @@ function fillSelects(){
 }
 
 function renderDash(){
-  const ing=DB.movimientos.filter(m=>m.tipo==="Ingreso"&&!esTransfer(m)).reduce((s,m)=>s+ +m.monto,0);
-  const egr=DB.movimientos.filter(m=>m.tipo==="Egreso"&&!esTransfer(m)).reduce((s,m)=>s+ +m.monto,0);
+  const ing=movsVivos().filter(m=>m.tipo==="Ingreso"&&!esTransfer(m)).reduce((s,m)=>s+ +m.monto,0);
+  const egr=movsVivos().filter(m=>m.tipo==="Egreso"&&!esTransfer(m)).reduce((s,m)=>s+ +m.monto,0);
   const comp=DB.pagos.filter(p=>p.estado!=="Pagado").reduce((s,p)=>s+ +p.monto,0);
   const dias=diasDeCaja();
   const sem=dias===null?["a","—"]:dias>30?["v",dias+" días"]:dias>=14?["a",dias+" días"]:["r",dias+" días"];
@@ -624,7 +652,7 @@ function renderDash(){
     <div class="card"><div class="k">Comprometido</div><div class="v">${fmt0(comp)}</div><div class="note">${DB.pagos.filter(p=>p.estado!=="Pagado").length} pagos planificados</div></div>`;
 
   // Dudas
-  const dudas=DB.movimientos.filter(m=>m.proyecto==="Por clasificar");
+  const dudas=movsVivos().filter(m=>m.proyecto==="Por clasificar");
   document.getElementById('dudasSec').style.display=dudas.length?"block":"none";
   const ops=[...new Set([...DB.bolsas.map(b=>b.nombre),...DB.movimientos.map(m=>m.proyecto)])].filter(n=>n&&n!=="Por clasificar").map(n=>`<option>${escHtml(n)}</option>`).join("")+'<option value="__nueva__">➕ Crear bolsa nueva…</option>';
   document.getElementById('dudas').innerHTML=dudas.map(m=>`
@@ -643,11 +671,11 @@ function renderDash(){
     return `<div class="bolsa h-${b.salud}" data-bolsa="${escHtml(b.nombre)}" onclick="verBolsa(this.dataset.bolsa)">
       <div class="top"></div>
       <div class="body">
-        ${donut(b.pct,col,b.resta<0)}
+        ${donut(b.pct,col,b.resta<0,b.sinPresupuesto)}
         <div>
           <div class="nm">${escHtml(b.nombre)} ${b.nombre==="Por clasificar"?"⚠":""}</div>
           <div class="rest" style="color:${b.resta<0?'var(--red)':'inherit'}">${fmt0(b.resta)}</div>
-          <span class="estado ${b.salud==='critica'?'pulse':''}">${icon} ${txt}</span>
+          <span class="estado ${b.salud==='critica'?'pulse':''}">${icon} ${txt}</span>${b.sinPresupuesto?'<div class="sin-ppto">sin presupuesto</div>':""}
         </div>
       </div>
       <div class="det">🧭 ${norte}<br>↓ ${fmt0(b.total)} · ↑ ${fmt0(b.egr)}${b.comprometido?` · ⏳ ${fmt0(b.comprometido)}`:""}${b.resta<0?`<br><button class="linklike" style="color:var(--red);font-weight:700" data-bolsa="${escHtml(b.nombre)}" onclick="event.stopPropagation();openTransfer(this.dataset.bolsa)">⇄ Cubrir con traslado</button>`:""}</div>
@@ -669,6 +697,7 @@ function renderDash(){
   const alertas=[];
   if(DB.saldo.monto<comp) alertas.push(`<div class="alerta">El saldo (${fmt0(DB.saldo.monto)}) no cubre lo comprometido (${fmt0(comp)}). <b>Falta ingresar ${fmt0(comp-DB.saldo.monto)}</b>.</div>`);
   bs.filter(b=>b.resta<0&&b.nombre!=="Por clasificar").forEach(b=>alertas.push(`<div class="alerta">Bolsa <b>${escHtml(b.nombre)}</b> en negativo: ${fmt0(b.resta)} — ha salido más de lo que entró.</div>`));
+  if(!(DB.pagos||[]).length&&!(DB.ingresosEsperados||[]).length) alertas.push(`<div class="alerta">Planificación vacía: el semáforo no puede medir compromisos.</div>`);
   if(dudas.length) alertas.push(`<div class="alerta">${dudas.length} movimientos sin bolsa (arriba en "Dudas").</div>`);
   DB.ingresosEsperados.filter(i=>i.estatus!=="Cobrado").forEach(i=>alertas.push(`<div class="alerta ok">Ingreso esperado: <b>${escHtml(i.concepto)}</b> ${fmt0(i.monto)} (${escHtml(i.estatus)}).</div>`));
   document.getElementById('alertas').innerHTML=alertas.join("")||'<p class="muted">Sin alertas.</p>';
@@ -702,7 +731,7 @@ function renderChart(){
   Chart.defaults.color=temaVar('--muted','#6d6a62');Chart.defaults.borderColor=temaVar('--line','#e1dacb');
   var cv=document.getElementById('flowChart');if(!cv)return;
   if(chartObj){try{chartObj.destroy();}catch(e){}chartObj=null;}
-  var movs=(DB.movimientos||[]).filter(function(m){return String(m.borrada)!=="true";});
+  var movs=movsVivos();
   var ejeY={ticks:{callback:function(v){return _dinero(v);}}};
   var cfg;
   if(chartTipo==="saldo"){
@@ -770,7 +799,7 @@ async function resolverDuda(id){
 
 const TRANSFER_TAG="«Transferencia»";
 let transferenciaEnCurso=false;
-function esTransfer(m){ return String(m.notas||"").indexOf(TRANSFER_TAG)===0 || String(m.beneficiario||"").charAt(0)==="⇄"; }
+function esTransfer(m){ return String(m.notas||"").indexOf(TRANSFER_TAG)===0 || String(m.beneficiario||"").charAt(0)==="⇄" || /^T-?\d/.test(String(m.id||"")); }
 function openTransfer(destinoPre){
   const proys=[...new Set([...DB.bolsas.map(b=>b.nombre),...DB.movimientos.map(m=>m.proyecto)])].filter(p=>p&&p!=="");
   const opts=proys.map(p=>`<option>${escHtml(p)}</option>`).join("");
@@ -829,7 +858,7 @@ async function saveUnify(){
   catch(e){ fToast("No se pudo confirmar la fusión ("+e.message+"). Actualiza y revisa antes de repetir.",1); }
 }
 function openPrestamos(){
-  const movs=(DB.movimientos||[]); const pairs={};
+  const movs=movsVivos(); const pairs={};
   movs.forEach(m=>{
     if(!esTransfer(m)) return;
     const otra=String(m.beneficiario||"").replace(/^⇄\s*/,"").trim();
@@ -887,7 +916,7 @@ function renderMovs(){
   const fB=document.getElementById('fBolsa').value, fT=document.getElementById('fTipo').value,
         fM=document.getElementById('fMes').value, fD=document.getElementById('fDesde').value,
         fH=document.getElementById('fHasta').value, fX=document.getElementById('fTxt').value.toLowerCase();
-  let rows=DB.movimientos.filter(m=>
+  let rows=movsVivos().filter(m=>
     (!fB||m.proyecto===fB)&&(!fT||m.tipo===fT)&&(!fM||mesDe(m.fecha)===fM)&&
     (!fD||m.fecha>=fD)&&(!fH||m.fecha<=fH)&&
     (!fX||(m.beneficiario+" "+(m.notas||"")+" "+m.proyecto).toLowerCase().includes(fX)));
@@ -995,10 +1024,21 @@ function openMov(id){
 }
 // Aviso no bloqueante (reemplaza los alert() nativos que rompían la estética).
 function fToast(msg,bad){var t=document.getElementById('fToast');if(!t){t=document.createElement('div');t.id='fToast';document.body.appendChild(t);}t.textContent=msg;t.className='ftoast'+(bad?' bad':'')+' on';clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove('on');},4200);}
+let guardandoMov=false;
+const _normBen=v=>String(v==null?"":v).trim().toLowerCase();
+function movDuplicado(obj){
+  return movsVivos().find(m=>String(m.fecha||"").slice(0,10)===String(obj.fecha||"").slice(0,10)&&+m.monto===+obj.monto&&_normBen(m.beneficiario)===_normBen(obj.beneficiario)&&m.tipo===obj.tipo);
+}
 async function saveMov(){
+  if(guardandoMov) return; // candado contra doble clic: una sola escritura a la vez
+  guardandoMov=true;
+  try{ await _saveMov(); } finally{ guardandoMov=false; }
+}
+async function _saveMov(){
   const id=document.getElementById('mvId').value;
   const obj={tipo:mvTipo.value,fecha:mvFecha.value,monto:+mvMonto.value,beneficiario:mvBen.value,proyecto:mvProy.value,notas:mvNotas.value};
   if(!obj.monto||!obj.beneficiario){fToast("Falta el monto o el beneficiario",1);return}
+  if(!id&&movDuplicado(obj)&&!confirm("Ya existe un movimiento con la misma fecha, monto, beneficiario y tipo. ¿Guardarlo de todos modos?")) return;
   // Confirmar con el servidor ANTES de tocar la base local: sin fantasmas si falla.
   try{
     if(id){ await api("updateMovimiento",{id,patch:obj,usuario:quien()});
@@ -1045,12 +1085,13 @@ function aiAdd(html,cls){const b=document.getElementById("aiBody");const d=docum
 function aiWelcome(){
   document.getElementById("aiBody").innerHTML="";
   const s=["¿De dónde salió el último pago grande?","¿Qué préstamos hay activos?","¿Qué pagos están pendientes esta semana?","Resume los ingresos de este mes"];
-  aiAdd("Pregúntame sobre cualquier pago o ingreso. Tengo los <b>307 mensajes</b> del grupo con su fecha y autor.<div class=ai-sug>"+s.map(x=>"<button onclick=\"aiSug(this)\">"+x+"</button>").join("")+"</div>","ai-bot");
+  const nMsg=(DB.mensajes&&DB.mensajes.length)?DB.mensajes.length:(CHAT_DATA||[]).length;
+  aiAdd("Pregúntame sobre cualquier pago o ingreso. Tengo "+(nMsg?"<b>"+nMsg+" mensajes</b> cargados":"los mensajes cargados")+" del grupo con su fecha y autor.<div class=ai-sug>"+s.map(x=>"<button onclick=\"aiSug(this)\">"+x+"</button>").join("")+"</div>","ai-bot");
 }
 function aiSug(b){document.getElementById("aiInput").value=b.textContent;aiAsk()}
 // Fuente combinada: movimientos EN VIVO del Sheet (crecen solos) + mensajes del grupo
 function fuenteTodo(){
-  const movs=(DB.movimientos||[]).filter(m=>String(m.borrada)!=="true").map(m=>({
+  const movs=movsVivos().map(m=>({
     f:(m.fecha||"").slice(5),q:"Mov "+(m.tipo||""),
     t:(m.tipo==="Ingreso"?"+":"-")+"$"+m.monto+" "+(m.beneficiario||"")+" · bolsa:"+(m.proyecto||"")+(m.notas?(" · "+m.notas):"")
   }));

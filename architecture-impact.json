@@ -1,7 +1,7 @@
 {
   "model_revision": "2026-09-30.1",
   "proposal_id": "CHG-ATLAS-001",
-  "summary": "Incorporar trazabilidad del atlas y corregir renderizado de datos; bloquear envíos concurrentes y conservar un aviso explícito cuando una transferencia queda parcial o incierta, sin reintentar escrituras automáticamente.",
+  "summary": "Incorporar trazabilidad del atlas y corregir renderizado de datos; bloquear envíos concurrentes y conservar un aviso explícito cuando una transferencia queda parcial o incierta, sin reintentar escrituras automáticamente. Esta revisión: un solo filtro de movimientos vigentes (excluye borrada verdadera sin importar mayúsculas) en bolsas, totales, días de caja, conciliación, tabla, gráfica e IA; esTransfer reconoce ids T-123/T456; saveMov con candado contra doble envío y confirmación ante duplicado; indicador de días desde el último movimiento; avisos de bolsa sin presupuesto y planificación vacía; conteo real de mensajes. Sin cambios en el backend ni en el Sheet.",
   "components": [
     "SYS-FLUJO",
     "GAS-FLUJO",
