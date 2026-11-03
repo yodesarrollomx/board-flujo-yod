@@ -204,3 +204,145 @@ test('cálculos de bolsa y proyección conservan resultados conocidos', () => {
   const projection = h.run('proyeccion8(DB,"2026-01-01T00:00:00")');
   assert.equal(projection[0].saldo, 1100); assert.equal(projection.at(-1).saldo, 1100);
 });
+
+function dbSintetica(extra) {
+  return Object.assign({ saldo: { monto: 777, fecha: '2026-01-01' }, saldos: [], historial: [], pagos: [], ingresosEsperados: [], mensajes: [],
+    bolsas: [{ nombre: 'Alfa', presupuesto: 0 }], movimientos: [] }, extra);
+}
+
+test('un duplicado marcado borrada ("TRUE", "true" o true) no cuenta en bolsas, totales, tabla ni IA', () => {
+  const base = { id: 'M-1', fecha: '2026-01-02', tipo: 'Ingreso', monto: 500, beneficiario: 'Cliente sintético', proyecto: 'Alfa' };
+  for (const marca of ['TRUE', 'true', true]) {
+    const h = harness();
+    h.setDB(dbSintetica({ movimientos: [base, { ...base, id: 'M-2', borrada: marca }, { id: 'M-3', fecha: '2026-01-03', tipo: 'Egreso', monto: 100, beneficiario: 'Proveedor sintético', proyecto: 'Alfa' }] }));
+    assert.equal(h.run('movsVivos().length'), 2);
+    const bolsa = h.context.bolsasCalc().find(b => b.nombre === 'Alfa');
+    assert.equal(bolsa.ing, 500); assert.equal(bolsa.egr, 100); assert.equal(bolsa.resta, 400); assert.equal(bolsa.movs.length, 2);
+    h.context.renderDash(); h.context.renderMovs();
+    const kpis = h.node('kpis').innerHTML;
+    assert.ok(kpis.includes('$500') && !kpis.includes('$1,000'));
+    assert.match(h.node('movsTotal').innerHTML, /^2 movimientos/);
+    assert.equal(h.run('fuenteTodo().length'), 2);
+  }
+  const h = harness();
+  h.setDB(dbSintetica({ movimientos: [{ ...base, borrada: false }, { ...base, id: 'M-2', borrada: 'FALSE' }, { ...base, id: 'M-4', borrada: '' }] }));
+  assert.equal(h.run('movsVivos().length'), 3);
+});
+
+test('esTransfer reconoce ids T con marca de tiempo y no confunde ids cortos ni los M-', () => {
+  const h = harness(), e = id => h.context.esTransfer({ id, notas: '', beneficiario: 'Alguien' });
+  assert.equal(e('T-1700000000000-A'), true);
+  assert.equal(e('T1700000000001-0'), true);
+  assert.equal(e('T-1700000000002'), true);
+  assert.equal(e('T1'), false);
+  assert.equal(e('T-123'), false);
+  assert.equal(e('M-1700000000003'), false);
+  assert.equal(e('Texto'), false);
+  assert.equal(h.context.esTransfer({ id: 'M-1', notas: '', beneficiario: '⇄ Otra' }), true);
+});
+
+test('el indicador de frescura calcula los días con una fecha fija y avisa si pasan de 3', () => {
+  const h = harness();
+  const mov = (fecha, extra) => ({ id: 'M-x', fecha, tipo: 'Egreso', monto: 1, beneficiario: 'B', proyecto: 'Alfa', ...extra });
+  h.setDB(dbSintetica({ movimientos: [mov('2026-10-20'), mov('2026-10-28'), mov('2026-11-02', { borrada: 'TRUE' })] }));
+  assert.equal(h.run('diasDesdeUltimoMov("2026-11-03")'), 6); // el borrado de noviembre no cuenta
+  const f = h.run('textoFrescura("2026-11-03")');
+  assert.equal(f.texto, '· último movimiento hace 6 días'); assert.equal(f.alerta, true);
+  h.setDB(dbSintetica({ movimientos: [mov('2026-10-31T07:00:00.000Z')] }));
+  assert.equal(h.run('diasDesdeUltimoMov("2026-11-03")'), 3);
+  assert.equal(h.run('textoFrescura("2026-11-03")').alerta, false);
+  h.setDB(dbSintetica({ movimientos: [mov(new Date(2026, 10, 2))] }));
+  assert.equal(h.run('textoFrescura("2026-11-03")').texto, '· último movimiento hace 1 día');
+  h.setDB(dbSintetica({ movimientos: [mov('2026-08-29'), mov('2027-01-15')] })); // la fecha futura se ignora
+  assert.equal(h.run('diasDesdeUltimoMov("2026-11-03")'), 66);
+  assert.equal(h.run('textoFrescura("2026-11-03")').alerta, true);
+  h.setDB(dbSintetica({ movimientos: [mov('no es fecha')] }));
+  const ilegible = h.run('textoFrescura("2026-11-03")');
+  assert.equal(ilegible.alerta, true); assert.match(ilegible.texto, /fecha ilegible/);
+  h.setDB(dbSintetica({ movimientos: [] }));
+  assert.equal(h.run('diasDesdeUltimoMov("2026-11-03")'), null);
+  assert.equal(h.run('textoFrescura("2026-11-03")'), null);
+  h.setDB(dbSintetica({ movimientos: [mov('2026-10-20')] }));
+  h.run('syncBase="Sync: 10:00"'); h.context.pintarSync('2026-11-03');
+  const info = h.node('syncInfo').innerHTML;
+  assert.ok(info.includes('Sync: 10:00') && info.includes('class="sync-vieja"') && info.includes('hace 14 días'));
+});
+
+function guardarHarness() {
+  const h = harness();
+  h.setDB(dbSintetica());
+  h.node('mvGuardar');
+  const campos = { mvId: '', mvTipo: 'Egreso', mvFecha: '2026-01-05', mvMonto: '75', mvBen: ' Proveedor Sintético ', mvProy: 'Alfa', mvNotas: '' };
+  for (const [id, value] of Object.entries(campos)) { h.node(id).value = value; h.context[id] = h.node(id); }
+  h.context.renderAll = () => {};
+  return h;
+}
+
+test('saveMov no escribe dos veces con doble llamada y libera el candado al fallar', async () => {
+  const h = guardarHarness(), calls = [];
+  let release;
+  h.context.api = (action, body) => { calls.push({ action, body }); return new Promise(resolve => { release = resolve; }); };
+  const primera = h.context.saveMov(), segunda = h.context.saveMov();
+  assert.equal(h.node('mvGuardar').disabled, true);
+  await segunda; assert.equal(calls.length, 1);
+  release({ ok: true }); await primera;
+  assert.equal(h.node('mvGuardar').disabled, false);
+  assert.equal(calls.length, 1); assert.equal(calls[0].action, 'addMovimiento');
+  assert.equal(h.run('DB.movimientos.length'), 1);
+  h.context.api = async () => { throw new Error('sin respuesta'); };
+  h.node('mvBen').value = 'Otro beneficiario';
+  await h.context.saveMov();
+  assert.equal(h.run('guardandoMov'), false); assert.equal(h.run('DB.movimientos.length'), 1);
+  let n = 0; h.context.api = async () => { n++; return { ok: true }; };
+  await h.context.saveMov(); assert.equal(n, 1);
+});
+
+test('saveMov pide confirmación ante un duplicado vivo y no guarda si se cancela', async () => {
+  const h = guardarHarness(); let escrituras = 0, preguntas = 0;
+  h.context.api = async () => { escrituras++; return { ok: true }; };
+  h.run('DB.movimientos.push({id:"M-9",fecha:"2026-01-05",tipo:"Egreso",monto:75,beneficiario:"proveedor sintético",proyecto:"Alfa"})');
+  h.context.confirm = () => { preguntas++; return false; };
+  await h.context.saveMov();
+  assert.equal(preguntas, 1); assert.equal(escrituras, 0); assert.equal(h.run('DB.movimientos.length'), 1); assert.equal(h.run('guardandoMov'), false);
+  h.context.confirm = () => { preguntas++; return true; };
+  await h.context.saveMov();
+  assert.equal(preguntas, 2); assert.equal(escrituras, 1); assert.equal(h.run('DB.movimientos.length'), 2);
+  // un borrado con los mismos datos no cuenta como duplicado
+  const g = guardarHarness(); let q = 0; g.context.api = async () => ({ ok: true }); g.context.confirm = () => { q++; return false; };
+  g.run('DB.movimientos.push({id:"M-9",fecha:"2026-01-05",tipo:"Egreso",monto:75,beneficiario:"Proveedor Sintético",proyecto:"Alfa",borrada:"TRUE"})');
+  await g.context.saveMov(); assert.equal(q, 0); assert.equal(g.run('DB.movimientos.length'), 2);
+});
+
+test('bolsa sin presupuesto, planificación vacía y conteo de mensajes se muestran sin números inventados', () => {
+  const h = harness();
+  h.setDB(dbSintetica({ bolsas: [{ nombre: 'Alfa', presupuesto: 0 }, { nombre: 'Beta', presupuesto: 400 }],
+    movimientos: [{ id: 'M-1', fecha: '2026-01-02', tipo: 'Ingreso', monto: 100, beneficiario: 'B', proyecto: 'Alfa' }] }));
+  h.context.renderDash();
+  const bolsas = h.node('bolsas').innerHTML;
+  assert.equal((bolsas.match(/sin presupuesto/g) || []).length, 1);
+  assert.equal(h.context.bolsasCalc().find(b => b.nombre === 'Alfa').resta, 100);
+  assert.match(h.node('alertas').innerHTML, /Planificación vacía: el semáforo no puede medir compromisos/);
+  h.setDB(dbSintetica({ ingresosEsperados: [{ estatus: 'Pendiente', monto: 5, fechaEsperada: '2026-02-01', concepto: 'X' }], pagos: [{ id: 'P-0', estado: 'Pagado', monto: 1, fechaLimite: '2026-01-01', proyecto: 'Alfa', concepto: 'C', tipoPago: 'Único', prioridad: 'Alta' }] }));
+  h.context.renderDash(); // sin pagos pendientes avisa aunque haya ingresos esperados
+  assert.match(h.node('alertas').innerHTML, /Planificación vacía/);
+  h.setDB(dbSintetica({ pagos: [{ id: 'P-1', estado: 'Pendiente', monto: 10, fechaLimite: '2026-02-01', proyecto: 'Alfa', concepto: 'C', tipoPago: 'Único', prioridad: 'Alta' }] }));
+  h.context.renderDash();
+  assert.doesNotMatch(h.node('alertas').innerHTML, /Planificación vacía/);
+  h.setDB(dbSintetica({ mensajes: [{ f: 'a', q: 'b', t: 'c' }, { f: 'd', q: 'e', t: 'f' }] }));
+  h.context.aiWelcome();
+  assert.match(h.node('aiBody').children[0].innerHTML, /<b>2 mensajes<\/b> cargados/);
+  assert.doesNotMatch(h.node('aiBody').children[0].innerHTML, /307/);
+  h.setDB(dbSintetica()); h.context.aiWelcome();
+  assert.match(h.node('aiBody').children.at(-1).innerHTML, /los mensajes cargados/);
+});
+
+test('el duplicado ignora acentos y espacios dobles, y openUnify no cuenta borradas', async () => {
+  const h = guardarHarness(); let preguntas = 0;
+  h.context.api = async () => ({ ok: true }); h.context.confirm = () => { preguntas++; return false; };
+  h.node('mvBen').value = 'Proveedor  Sintético';
+  h.run('DB.movimientos.push({id:"M-9",fecha:"2026-01-05",tipo:"Egreso",monto:75,beneficiario:"PROVEEDOR SINTETICO",proyecto:"Alfa"})');
+  await h.context.saveMov(); assert.equal(preguntas, 1);
+  h.run('DB.movimientos.push({id:"M-8",fecha:"2026-01-05",tipo:"Ingreso",monto:5,beneficiario:"x",proyecto:"Alfa",borrada:"TRUE"})');
+  h.context.openUnify();
+  assert.match(h.node('unOrigen').innerHTML, /Alfa — 1 mov/);
+});
