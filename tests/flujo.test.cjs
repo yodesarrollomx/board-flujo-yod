@@ -231,12 +231,12 @@ test('un duplicado marcado borrada ("TRUE", "true" o true) no cuenta en bolsas, 
 
 test('esTransfer reconoce ids T con marca de tiempo y no confunde ids cortos ni los M-', () => {
   const h = harness(), e = id => h.context.esTransfer({ id, notas: '', beneficiario: 'Alguien' });
-  assert.equal(e('T-1782763301140-A'), true);
-  assert.equal(e('T1782763363001-0'), true);
-  assert.equal(e('T-1782763301140'), true);
+  assert.equal(e('T-1700000000000-A'), true);
+  assert.equal(e('T1700000000001-0'), true);
+  assert.equal(e('T-1700000000002'), true);
   assert.equal(e('T1'), false);
   assert.equal(e('T-123'), false);
-  assert.equal(e('M-1782763301140'), false);
+  assert.equal(e('M-1700000000003'), false);
   assert.equal(e('Texto'), false);
   assert.equal(h.context.esTransfer({ id: 'M-1', notas: '', beneficiario: '⇄ Otra' }), true);
 });
