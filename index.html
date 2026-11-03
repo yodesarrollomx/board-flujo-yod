@@ -297,7 +297,7 @@ h1.title{color:var(--ink)}
   <label>Bolsa / Proyecto</label><select id="mvProy" onchange="proyChange(this)"></select>
   <label>Notas / link comprobante (Drive)</label><textarea id="mvNotas" rows="2"></textarea>
   <div style="display:flex;gap:.6rem;margin-top:1rem">
-    <button class="btn" onclick="saveMov()">Guardar</button>
+    <button class="btn" id="mvGuardar" onclick="saveMov()">Guardar</button>
     <button class="btn ghost" onclick="closeM('mMov')">Cancelar</button>
   </div>
 </div></div>
@@ -543,13 +543,16 @@ function _diaUTC(v){
   return x?Date.UTC(+x[1],+x[2]-1,+x[3]):null;
 }
 function diasDesdeUltimoMov(hoy){
-  let max=null; movsVivos().forEach(m=>{ const t=_diaUTC(m.fecha); if(t!==null&&(max===null||t>max)) max=t; });
   const h=_diaUTC(hoy===undefined?new Date():hoy);
-  if(max===null||h===null) return null;
+  if(h===null) return null;
+  // Se ignoran fechas posteriores a hoy (capturas con año equivocado): no deben tapar la antigüedad real.
+  let max=null; movsVivos().forEach(m=>{ const t=_diaUTC(m.fecha); if(t!==null&&t<=h&&(max===null||t>max)) max=t; });
+  if(max===null) return null;
   return Math.max(0,Math.round((h-max)/864e5));
 }
 function textoFrescura(hoy){
-  const n=diasDesdeUltimoMov(hoy); if(n===null) return null;
+  const n=diasDesdeUltimoMov(hoy);
+  if(n===null) return movsVivos().length?{dias:null,alerta:true,texto:"· último movimiento: fecha ilegible"}:null;
   return {dias:n,alerta:n>3,texto:"· último movimiento "+(n===0?"hoy":n===1?"hace 1 día":"hace "+n+" días")};
 }
 let syncBase="";
@@ -697,7 +700,7 @@ function renderDash(){
   const alertas=[];
   if(DB.saldo.monto<comp) alertas.push(`<div class="alerta">El saldo (${fmt0(DB.saldo.monto)}) no cubre lo comprometido (${fmt0(comp)}). <b>Falta ingresar ${fmt0(comp-DB.saldo.monto)}</b>.</div>`);
   bs.filter(b=>b.resta<0&&b.nombre!=="Por clasificar").forEach(b=>alertas.push(`<div class="alerta">Bolsa <b>${escHtml(b.nombre)}</b> en negativo: ${fmt0(b.resta)} — ha salido más de lo que entró.</div>`));
-  if(!(DB.pagos||[]).length&&!(DB.ingresosEsperados||[]).length) alertas.push(`<div class="alerta">Planificación vacía: el semáforo no puede medir compromisos.</div>`);
+  if(!(DB.pagos||[]).some(p=>p.estado!=="Pagado")) alertas.push(`<div class="alerta">Planificación vacía: el semáforo no puede medir compromisos.</div>`);
   if(dudas.length) alertas.push(`<div class="alerta">${dudas.length} movimientos sin bolsa (arriba en "Dudas").</div>`);
   DB.ingresosEsperados.filter(i=>i.estatus!=="Cobrado").forEach(i=>alertas.push(`<div class="alerta ok">Ingreso esperado: <b>${escHtml(i.concepto)}</b> ${fmt0(i.monto)} (${escHtml(i.estatus)}).</div>`));
   document.getElementById('alertas').innerHTML=alertas.join("")||'<p class="muted">Sin alertas.</p>';
@@ -799,7 +802,7 @@ async function resolverDuda(id){
 
 const TRANSFER_TAG="«Transferencia»";
 let transferenciaEnCurso=false;
-function esTransfer(m){ return String(m.notas||"").indexOf(TRANSFER_TAG)===0 || String(m.beneficiario||"").charAt(0)==="⇄" || /^T-?\d/.test(String(m.id||"")); }
+function esTransfer(m){ return String(m.notas||"").indexOf(TRANSFER_TAG)===0 || String(m.beneficiario||"").charAt(0)==="⇄" || /^T-?\d{13}/.test(String(m.id||"")); }
 function openTransfer(destinoPre){
   const proys=[...new Set([...DB.bolsas.map(b=>b.nombre),...DB.movimientos.map(m=>m.proyecto)])].filter(p=>p&&p!=="");
   const opts=proys.map(p=>`<option>${escHtml(p)}</option>`).join("");
@@ -842,7 +845,7 @@ async function saveTransfer(){
 }
 function openUnify(){
   const proys=[...new Set([...DB.bolsas.map(b=>b.nombre),...DB.movimientos.map(m=>m.proyecto)])].filter(p=>p&&p!=="");
-  const cnt={}; DB.movimientos.forEach(m=>{cnt[m.proyecto]=(cnt[m.proyecto]||0)+1;});
+  const cnt={}; movsVivos().forEach(m=>{cnt[m.proyecto]=(cnt[m.proyecto]||0)+1;});
   const raro=p=>(/\s{2,}|^\s|\s$/.test(p))?" ⚠espacios":"";
   const opts=proys.map(p=>`<option value="${escHtml(p)}">${escHtml(p)} — ${cnt[p]||0} mov${raro(p)}</option>`).join("");
   document.getElementById('unOrigen').innerHTML=opts;
@@ -1025,14 +1028,15 @@ function openMov(id){
 // Aviso no bloqueante (reemplaza los alert() nativos que rompían la estética).
 function fToast(msg,bad){var t=document.getElementById('fToast');if(!t){t=document.createElement('div');t.id='fToast';document.body.appendChild(t);}t.textContent=msg;t.className='ftoast'+(bad?' bad':'')+' on';clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove('on');},4200);}
 let guardandoMov=false;
-const _normBen=v=>String(v==null?"":v).trim().toLowerCase();
+const _normBen=v=>String(v==null?"":v).normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim().toLowerCase();
 function movDuplicado(obj){
   return movsVivos().find(m=>String(m.fecha||"").slice(0,10)===String(obj.fecha||"").slice(0,10)&&+m.monto===+obj.monto&&_normBen(m.beneficiario)===_normBen(obj.beneficiario)&&m.tipo===obj.tipo);
 }
 async function saveMov(){
   if(guardandoMov) return; // candado contra doble clic: una sola escritura a la vez
   guardandoMov=true;
-  try{ await _saveMov(); } finally{ guardandoMov=false; }
+  const boton=document.getElementById('mvGuardar'); if(boton) boton.disabled=true;
+  try{ await _saveMov(); } finally{ guardandoMov=false; if(boton) boton.disabled=false; }
 }
 async function _saveMov(){
   const id=document.getElementById('mvId').value;
