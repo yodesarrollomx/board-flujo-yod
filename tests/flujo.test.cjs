@@ -204,3 +204,38 @@ test('cálculos de bolsa y proyección conservan resultados conocidos', () => {
   const projection = h.run('proyeccion8(DB,"2026-01-01T00:00:00")');
   assert.equal(projection[0].saldo, 1100); assert.equal(projection.at(-1).saldo, 1100);
 });
+
+test('PLAN-05 · caja por proyecto con folio y alarma bajo el piso de 5% del costo de obra', () => {
+  const h = harness(), data = fixture();
+  data.bolsas = [
+    { nombre: 'Alysa obra', presupuesto: 100000, folio: 'prj-alysa', costo_obra: 4000000 },        // piso 200,000 → abajo
+    { nombre: 'Alysa acabados', presupuesto: 50000, folio: 'PRJ-ALYSA', costo_obra: '' },
+    { nombre: 'Miramar', presupuesto: 900000, folio: 'PRJ-RM', costo_obra: 10000000 },             // piso 500,000 → arriba
+    { nombre: 'Sin folio', presupuesto: 10, folio: 'no es folio', costo_obra: 999 },
+    { nombre: payload, presupuesto: 5, folio: 'PRJ-X<b>' }
+  ];
+  data.movimientos = []; data.pagos = [];
+  h.setDB(data);
+  const bs = h.context.bolsasCalc(), by = n => bs.find(b => b.nombre === n);
+  assert.equal(by('Alysa obra').folio, 'PRJ-ALYSA');
+  assert.equal(by('Alysa obra').piso, 200000);
+  assert.equal(by('Alysa obra').bajoPiso, true);
+  assert.equal(by('Alysa obra').salud, 'riesgo', 'abajo del piso cuenta como riesgo');
+  assert.equal(by('Miramar').bajoPiso, false);
+  assert.equal(by('Sin folio').folio, '', 'un folio mal escrito no agrupa');
+  assert.equal(by(payload).folio, '', 'tampoco uno con marcas');
+  const cajas = h.context.cajasPorFolio(bs);
+  assert.equal(JSON.stringify(cajas.map(c => c.folio)), JSON.stringify(['PRJ-ALYSA', 'PRJ-RM']), 'primero lo que está abajo del piso');
+  assert.equal(cajas[0].resta, 150000);
+  assert.equal(cajas[0].piso, 200000, 'el costo de obra es del proyecto: no se suma por bolsa');
+  h.context.renderAll();
+  const t = h.node('cajas').innerHTML;
+  safeMarkup(t);
+  assert.ok(t.includes('PRJ-ALYSA') && t.includes('⚠ Abajo del piso') && t.includes('$200,000'));
+  assert.ok(t.includes('Arriba del piso'));
+  assert.equal(h.node('cajasSec').style.display, '');
+  assert.ok(h.node('bolsas').innerHTML.includes('Abajo del piso: 5% de la obra = $200,000'));
+  // sin folios no aparece la sección
+  const sin = fixture(); h.setDB(sin); h.context.renderAll();
+  assert.equal(h.node('cajasSec').style.display, 'none');
+});

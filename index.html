@@ -69,6 +69,9 @@ tr:hover td{background:rgba(255,255,255,.03)}
 .bolsa .estado{display:inline-flex;align-items:center;gap:.3rem;font-size:.64rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-top:.25rem;padding:.1rem .5rem;border-radius:99px}
 .h-sana .estado{background:rgba(143,191,139,.18);color:var(--sem-sana)}.h-atencion .estado{background:rgba(217,164,91,.18);color:var(--sem-atencion)}
 .h-riesgo .estado{background:rgba(224,129,90,.18);color:var(--sem-riesgo)}.h-critica .estado{background:rgba(224,96,90,.18);color:var(--sem-critica)}
+.bolsa .folio{display:inline-block;margin-left:.3rem;padding:0 .45rem;border-radius:99px;font-size:.6rem;font-weight:700;letter-spacing:.03em;background:rgba(185,139,60,.18);border:1px solid rgba(185,139,60,.45);vertical-align:middle}
+.cajas{width:100%;border-collapse:collapse;font-size:.82rem}.cajas th,.cajas td{padding:.45rem .5rem;border-bottom:1px solid var(--line);text-align:left}.cajas td.n,.cajas th.n{text-align:right;font-variant-numeric:tabular-nums}
+.cajas .bajo{color:var(--red);font-weight:700}
 .bolsa .det{font-size:.66rem;color:var(--muted);margin:.45rem .9rem 0;line-height:1.6;border-top:1px dashed var(--line);padding-top:.4rem}
 .donut{flex:none}
 .donut text{font-weight:700;font-size:11px;fill:var(--ink)}
@@ -199,6 +202,10 @@ h1.title{color:var(--ink)}
     <div class="section" id="dudasSec" style="display:none">
       <h3>⚠ Dudas por acomodar <span class="muted">elige la bolsa correcta y se auto-acomoda</span></h3>
       <div id="dudas"></div>
+    </div>
+    <div class="section" id="cajasSec" style="display:none">
+      <h3>Caja por proyecto <span class="muted">las bolsas de un mismo folio juntas, con su piso: 5% del costo de obra</span></h3>
+      <div id="cajas"></div>
     </div>
     <div class="section">
       <h3>Bolsas por proyecto <span class="muted">pica una bolsa para ver su cuenta T</span> <button class="btn" style="float:right;padding:.35rem .8rem;font-size:.85rem" onclick="openTransfer()">⇄ Transferir</button> <button class="btn" style="float:right;padding:.35rem .8rem;font-size:.85rem;margin-right:.5rem" onclick="openUnify()">⇄ Unificar</button> <button class="btn" style="float:right;padding:.35rem .8rem;font-size:.85rem;margin-right:.5rem" onclick="openPrestamos()">📊 Préstamos</button></h3>
@@ -531,12 +538,24 @@ function escHtml(value){return String(value==null?'':value).replace(/[&<>"']/g,c
 const fmt = n => "$"+Number(n).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmt0 = n => "$"+Math.round(Number(n)).toLocaleString('es-MX');
 const mesDe = f => { const d=f.slice(0,7).split("-"); return MESES[+d[1]-1]+" "+d[0]; };
+const PISO_OBRA=0.05;   // PLAN-05 · alarma cuando la caja de un proyecto baja de 5% de su costo de obra
+function folioDe(v){const f=String(v==null?"":v).trim().toUpperCase();return /^PRJ-[A-Z0-9-]{2,40}$/.test(f)?f:"";}
+/* Caja por proyecto: suma las bolsas del mismo folio. El piso es 5% del costo de obra (el mayor que traiga
+   alguna de sus bolsas: el costo es del proyecto, no se suma por bolsa). */
+function cajasPorFolio(bs){
+  const g={};
+  bs.forEach(b=>{ if(!b.folio) return; const c=g[b.folio]||(g[b.folio]={folio:b.folio,bolsas:[],resta:0,comprometido:0,costoObra:0});
+    c.bolsas.push(b.nombre); c.resta+=b.resta; c.comprometido+=b.comprometido||0; c.costoObra=Math.max(c.costoObra,b.costoObra||0); });
+  return Object.values(g).map(c=>{c.piso=c.costoObra>0?c.costoObra*PISO_OBRA:0;c.bajoPiso=c.piso>0&&c.resta<c.piso;return c;})
+    .sort((a,b)=>(b.bajoPiso-a.bajoPiso)||a.folio.localeCompare(b.folio));
+}
 function bolsasCalc(){
   const map = {};
-  DB.bolsas.forEach(b=>map[b.nombre]={nombre:b.nombre,presupuesto:+b.presupuesto||0,ing:0,egr:0,egr14:0,movs:[]});
+  // PLAN-05 · cada bolsa puede traer su folio (PRJ-…) y el costo de obra de su proyecto (columnas «folio» y «costo_obra» de Bolsas)
+  DB.bolsas.forEach(b=>map[b.nombre]={nombre:b.nombre,presupuesto:+b.presupuesto||0,folio:folioDe(b.folio),costoObra:Math.max(0,+b.costo_obra||0),ing:0,egr:0,egr14:0,movs:[]});
   const hace14=new Date(Date.now()-14*864e5).toISOString().slice(0,10);
   DB.movimientos.forEach(m=>{
-    if(!map[m.proyecto]) map[m.proyecto]={nombre:m.proyecto,presupuesto:0,ing:0,egr:0,egr14:0,movs:[]};
+    if(!map[m.proyecto]) map[m.proyecto]={nombre:m.proyecto,presupuesto:0,folio:"",costoObra:0,ing:0,egr:0,egr14:0,movs:[]};
     const b=map[m.proyecto]; b.movs.push(m);
     if(m.tipo==="Ingreso") b.ing+=+m.monto; else { b.egr+=+m.monto; if(m.fecha>=hace14) b.egr14+=+m.monto; }
   });
@@ -547,8 +566,10 @@ function bolsasCalc(){
     b.burn=b.egr14/14;
     b.dias=b.burn>0&&b.resta>0?Math.round(b.resta/b.burn):null;
     b.comprometido=DB.pagos.filter(p=>p.estado!=="Pagado"&&p.proyecto===b.nombre).reduce((s,p)=>s+ +p.monto,0);
+    b.piso=b.costoObra>0?b.costoObra*PISO_OBRA:0;
+    b.bajoPiso=b.piso>0&&b.resta<b.piso;
     if(b.resta<0) b.salud="critica";
-    else if(b.comprometido>b.resta) b.salud="riesgo";
+    else if(b.comprometido>b.resta||b.bajoPiso) b.salud="riesgo";
     else if(b.pct<25||(b.dias!==null&&b.dias<14)) b.salud="atencion";
     else b.salud="sana";
   });
@@ -634,9 +655,16 @@ function renderDash(){
 
   // Bolsas con salud
   const bs=bolsasCalc();
+  // PLAN-05 · caja por proyecto (folio), con su piso de 5% del costo de obra
+  const cajas=cajasPorFolio(bs), cajasSec=document.getElementById('cajasSec');
+  if(cajasSec){
+    cajasSec.style.display=cajas.length?"":"none";
+    document.getElementById('cajas').innerHTML=cajas.length?`<table class="cajas"><thead><tr><th>Proyecto</th><th>Bolsas</th><th class="n">Caja</th><th class="n">Piso 5% de obra</th><th>Estado</th></tr></thead><tbody>${cajas.map(c=>`<tr><td><b>${escHtml(c.folio)}</b></td><td>${c.bolsas.map(escHtml).join(", ")}</td><td class="n">${fmt0(c.resta)}</td><td class="n">${c.piso?fmt0(c.piso):"—"}</td><td class="${c.bajoPiso?"bajo":""}">${c.bajoPiso?"⚠ Abajo del piso":c.piso?"Arriba del piso":"Falta su costo de obra"}</td></tr>`).join("")}</tbody></table>`:"";
+  }
   document.getElementById('bolsas').innerHTML=bs.map(b=>{
     const [icon,txt]=SALUD_TXT[b.salud], col=SALUD_COL[b.salud];
     const norte = b.resta<0 ? "Salió más de lo que entró"
+      : b.bajoPiso ? `Abajo del piso: 5% de la obra = ${fmt0(b.piso)}`
       : b.comprometido>b.resta ? `Compromisos ${fmt0(b.comprometido)} > fondo`
       : b.dias!==null ? `~${b.dias} días al ritmo actual`
       : b.egr14>0 ? "Gasto reciente, fondo aguanta" : "Sin gasto reciente";
@@ -645,7 +673,7 @@ function renderDash(){
       <div class="body">
         ${donut(b.pct,col,b.resta<0)}
         <div>
-          <div class="nm">${escHtml(b.nombre)} ${b.nombre==="Por clasificar"?"⚠":""}</div>
+          <div class="nm">${escHtml(b.nombre)} ${b.nombre==="Por clasificar"?"⚠":""}${b.folio?`<span class="folio">${escHtml(b.folio)}</span>`:""}</div>
           <div class="rest" style="color:${b.resta<0?'var(--red)':'inherit'}">${fmt0(b.resta)}</div>
           <span class="estado ${b.salud==='critica'?'pulse':''}">${icon} ${txt}</span>
         </div>
