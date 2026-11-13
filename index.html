@@ -72,6 +72,7 @@ tr:hover td{background:rgba(255,255,255,.03)}
 .bolsa .folio{display:inline-block;margin-left:.3rem;padding:0 .45rem;border-radius:99px;font-size:.6rem;font-weight:700;letter-spacing:.03em;background:rgba(185,139,60,.18);border:1px solid rgba(185,139,60,.45);vertical-align:middle}
 .cajas{width:100%;border-collapse:collapse;font-size:.82rem}.cajas th,.cajas td{padding:.45rem .5rem;border-bottom:1px solid var(--line);text-align:left}.cajas td.n,.cajas th.n{text-align:right;font-variant-numeric:tabular-nums}
 .cajas .bajo{color:var(--red);font-weight:700}
+#cajas{overflow-x:auto}.cajas td.n{white-space:nowrap}.cajas .estadoMovil{display:none;font-size:.72rem;margin-top:.15rem}@media(max-width:700px){.cajas .bolsasCol,.cajas .estadoCol{display:none}.cajas .estadoMovil{display:block}.cajas{font-size:.78rem}}
 .bolsa .det{font-size:.66rem;color:var(--muted);margin:.45rem .9rem 0;line-height:1.6;border-top:1px dashed var(--line);padding-top:.4rem}
 .donut{flex:none}
 .donut text{font-weight:700;font-size:11px;fill:var(--ink)}
@@ -204,7 +205,7 @@ h1.title{color:var(--ink)}
       <div id="dudas"></div>
     </div>
     <div class="section" id="cajasSec" style="display:none">
-      <h3>Caja por proyecto <span class="muted">las bolsas de un mismo folio juntas, con su piso: 5% del costo de obra</span></h3>
+      <h3>Caja por proyecto <span class="muted">las bolsas de un mismo folio juntas, con su piso (5% del costo de obra) y cómo queda en 8 semanas con los cobros y pagos ya capturados</span></h3>
       <div id="cajas"></div>
     </div>
     <div class="section">
@@ -542,13 +543,28 @@ const PISO_OBRA=0.05;   // PLAN-05 · alarma cuando la caja de un proyecto baja 
 function folioDe(v){const f=String(v==null?"":v).trim().toUpperCase();return /^PRJ-[A-Z0-9-]{2,40}$/.test(f)?f:"";}
 /* Caja por proyecto: suma las bolsas del mismo folio. El piso es 5% del costo de obra (el mayor que traiga
    alguna de sus bolsas: el costo es del proyecto, no se suma por bolsa). */
-function cajasPorFolio(bs){
+function cajasPorFolio(bs,db,hoy){
   const g={};
   bs.forEach(b=>{ if(!b.folio) return; const c=g[b.folio]||(g[b.folio]={folio:b.folio,bolsas:[],resta:0,comprometido:0,costoObra:0});
     c.bolsas.push(b.nombre); c.resta+=b.resta; c.comprometido+=b.comprometido||0; c.costoObra=Math.max(c.costoObra,b.costoObra||0); });
-  return Object.values(g).map(c=>{c.piso=c.costoObra>0?c.costoObra*PISO_OBRA:0;c.bajoPiso=c.piso>0&&c.resta<c.piso;return c;})
-    .sort((a,b)=>(b.bajoPiso-a.bajoPiso)||a.folio.localeCompare(b.folio));
+  return Object.values(g).map(c=>{c.piso=c.costoObra>0?c.costoObra*PISO_OBRA:0;c.bajoPiso=c.piso>0&&c.resta<c.piso;
+      if(db){const p=proyeccionFolio(c,db,hoy);c.en8=p.fin;c.cae=p.cae;c.caeDesde=p.cae>=0?p.sem[p.cae].desde:null;}
+      return c;})
+    .sort((a,b)=>(b.bajoPiso-a.bajoPiso)||((b.cae>=0)-(a.cae>=0))||a.folio.localeCompare(b.folio));
 }
+/* PLAN-05 · calendario por proyecto: con lo que ya está capturado (cobros esperados y pagos pendientes
+   de sus bolsas) se proyecta la caja del proyecto 8 semanas, igual que la general (proyeccion8). Avisa la
+   primera semana en que bajaría del piso. No inventa: sin compromisos capturados, la caja se queda igual. */
+function proyeccionFolio(c,db,hoy){
+  const de=new Set(c.bolsas);
+  const sem=proyeccion8({saldo:{monto:c.resta},
+    pagos:(db.pagos||[]).filter(p=>de.has(p.proyecto)),
+    ingresosEsperados:(db.ingresosEsperados||[]).filter(i=>de.has(i.proyecto))},hoy);
+  const cae=c.piso>0?sem.findIndex(w=>w.saldo<c.piso):-1;
+  return {sem,cae,fin:sem.length?sem[sem.length-1].saldo:c.resta};
+}
+function estadoCaja(c){return c.bajoPiso?["bajo","⚠ Abajo del piso"]:c.cae>=0?["bajo","⚠ Bajaría del piso la semana del "+_fechaCorta(_isoLocal(c.caeDesde))]:c.piso?["","Arriba del piso"]:["","Falta su costo de obra"];}
+function _isoLocal(d){return d?d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"):"";}
 function bolsasCalc(){
   const map = {};
   // PLAN-05 · cada bolsa puede traer su folio (PRJ-…) y el costo de obra de su proyecto (columnas «folio» y «costo_obra» de Bolsas)
@@ -656,10 +672,10 @@ function renderDash(){
   // Bolsas con salud
   const bs=bolsasCalc();
   // PLAN-05 · caja por proyecto (folio), con su piso de 5% del costo de obra
-  const cajas=cajasPorFolio(bs), cajasSec=document.getElementById('cajasSec');
+  const cajas=cajasPorFolio(bs,DB), cajasSec=document.getElementById('cajasSec');
   if(cajasSec){
     cajasSec.style.display=cajas.length?"":"none";
-    document.getElementById('cajas').innerHTML=cajas.length?`<table class="cajas"><thead><tr><th>Proyecto</th><th>Bolsas</th><th class="n">Caja</th><th class="n">Piso 5% de obra</th><th>Estado</th></tr></thead><tbody>${cajas.map(c=>`<tr><td><b>${escHtml(c.folio)}</b></td><td>${c.bolsas.map(escHtml).join(", ")}</td><td class="n">${fmt0(c.resta)}</td><td class="n">${c.piso?fmt0(c.piso):"—"}</td><td class="${c.bajoPiso?"bajo":""}">${c.bajoPiso?"⚠ Abajo del piso":c.piso?"Arriba del piso":"Falta su costo de obra"}</td></tr>`).join("")}</tbody></table>`:"";
+    document.getElementById('cajas').innerHTML=cajas.length?`<table class="cajas"><thead><tr><th>Proyecto</th><th class="bolsasCol">Bolsas</th><th class="n">Caja</th><th class="n">Piso 5% de obra</th><th class="n">En 8 semanas</th><th class="estadoCol">Estado</th></tr></thead><tbody>${cajas.map(c=>`<tr><td><b>${escHtml(c.folio)}</b><div class="estadoMovil ${estadoCaja(c)[0]}">${escHtml(estadoCaja(c)[1])}</div></td><td class="bolsasCol">${c.bolsas.map(escHtml).join(", ")}</td><td class="n">${fmt0(c.resta)}</td><td class="n">${c.piso?fmt0(c.piso):"—"}</td><td class="n">${fmt0(c.en8)}</td><td class="estadoCol ${estadoCaja(c)[0]}">${escHtml(estadoCaja(c)[1])}</td></tr>`).join("")}</tbody></table>`:"";
   }
   document.getElementById('bolsas').innerHTML=bs.map(b=>{
     const [icon,txt]=SALUD_TXT[b.salud], col=SALUD_COL[b.salud];
