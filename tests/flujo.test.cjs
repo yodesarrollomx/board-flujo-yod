@@ -204,3 +204,60 @@ test('cálculos de bolsa y proyección conservan resultados conocidos', () => {
   const projection = h.run('proyeccion8(DB,"2026-01-01T00:00:00")');
   assert.equal(projection[0].saldo, 1100); assert.equal(projection.at(-1).saldo, 1100);
 });
+
+test('PLAN-05 · caja por proyecto con folio y alarma bajo el piso de 5% del costo de obra', () => {
+  const h = harness(), data = fixture();
+  data.bolsas = [
+    { nombre: 'Alysa obra', presupuesto: 100000, folio: 'prj-alysa', costo_obra: 4000000 },        // piso 200,000 → abajo
+    { nombre: 'Alysa acabados', presupuesto: 50000, folio: 'PRJ-ALYSA', costo_obra: '' },
+    { nombre: 'Miramar', presupuesto: 900000, folio: 'PRJ-RM', costo_obra: 10000000 },             // piso 500,000 → arriba
+    { nombre: 'Sin folio', presupuesto: 10, folio: 'no es folio', costo_obra: 999 },
+    { nombre: payload, presupuesto: 5, folio: 'PRJ-X<b>' }
+  ];
+  data.movimientos = []; data.pagos = [];
+  h.setDB(data);
+  const bs = h.context.bolsasCalc(), by = n => bs.find(b => b.nombre === n);
+  assert.equal(by('Alysa obra').folio, 'PRJ-ALYSA');
+  assert.equal(by('Alysa obra').piso, 200000);
+  assert.equal(by('Alysa obra').bajoPiso, true);
+  assert.equal(by('Alysa obra').salud, 'riesgo', 'abajo del piso cuenta como riesgo');
+  assert.equal(by('Miramar').bajoPiso, false);
+  assert.equal(by('Sin folio').folio, '', 'un folio mal escrito no agrupa');
+  assert.equal(by(payload).folio, '', 'tampoco uno con marcas');
+  const cajas = h.context.cajasPorFolio(bs);
+  assert.equal(JSON.stringify(cajas.map(c => c.folio)), JSON.stringify(['PRJ-ALYSA', 'PRJ-RM']), 'primero lo que está abajo del piso');
+  assert.equal(cajas[0].resta, 150000);
+  assert.equal(cajas[0].piso, 200000, 'el costo de obra es del proyecto: no se suma por bolsa');
+  h.context.renderAll();
+  const t = h.node('cajas').innerHTML;
+  safeMarkup(t);
+  assert.ok(t.includes('PRJ-ALYSA') && t.includes('⚠ Abajo del piso') && t.includes('$200,000'));
+  assert.ok(t.includes('Arriba del piso'));
+  assert.equal(h.node('cajasSec').style.display, '');
+  assert.ok(h.node('bolsas').innerHTML.includes('Abajo del piso: 5% de la obra = $200,000'));
+  // PLAN-05 · calendario por proyecto: un pago capturado que la baja del piso avisa la semana en que pasaría
+  const fut = fixture();
+  fut.bolsas = [{ nombre: 'Miramar', presupuesto: 600000, folio: 'PRJ-RM', costo_obra: 10000000 },     // piso 500,000
+                { nombre: 'Otra', presupuesto: 1, folio: '', costo_obra: '' }];
+  fut.movimientos = [];
+  fut.pagos = [{ estado: 'Pendiente', monto: 150000, fechaLimite: '2026-01-10', proyecto: 'Miramar', concepto: 'Estimación 3', tipoPago: 'Programado', prioridad: 'Alta' },
+               { estado: 'Pendiente', monto: 999999, fechaLimite: '2026-01-10', proyecto: 'Otra', concepto: 'no es del folio', tipoPago: 'Programado', prioridad: 'Baja' },
+               { estado: 'Pagado', monto: 999999, fechaLimite: '2026-01-10', proyecto: 'Miramar', concepto: 'ya pagado', tipoPago: 'Programado', prioridad: 'Baja' }];
+  fut.ingresosEsperados = [{ estatus: 'Pendiente', monto: 20000, fechaEsperada: '2026-01-20', proyecto: 'Miramar', concepto: 'Aportación' }];
+  h.setDB(fut);
+  const [rm] = h.context.cajasPorFolio(h.context.bolsasCalc(), h.run('DB'), '2026-01-01T00:00:00');
+  assert.equal(rm.bajoPiso, false, 'hoy está arriba del piso');
+  assert.equal(rm.cae, 1, 'el pago del 10 de enero cae en la segunda semana');
+  assert.equal(rm.en8, 470000, 'caja 600,000 − 150,000 + 20,000; no cuenta pagos de otras bolsas ni ya pagados');
+  assert.equal(rm.caeDesde.getDate(), 8);
+  h.context.renderAll();   // con la fecha de hoy el pago ya venció: cae en la primera semana y también avisa
+  const tf = h.node('cajas').innerHTML;
+  safeMarkup(tf);
+  assert.ok(tf.includes('En 8 semanas') && tf.includes('$470,000') && tf.includes('⚠ Bajaría del piso la semana del'));
+  // sin costo de obra no hay aviso aunque baje
+  const sinCosto = h.context.cajasPorFolio([{ nombre: 'Miramar', folio: 'PRJ-RM', resta: 10, costoObra: 0, comprometido: 0 }], h.run('DB'), '2026-01-01T00:00:00');
+  assert.equal(sinCosto[0].cae, -1);
+  // sin folios no aparece la sección
+  const sin = fixture(); h.setDB(sin); h.context.renderAll();
+  assert.equal(h.node('cajasSec').style.display, 'none');
+});

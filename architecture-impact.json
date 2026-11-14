@@ -1,15 +1,15 @@
 {
-  "model_revision": "2026-09-30.1",
-  "proposal_id": "CHG-ATLAS-001",
-  "summary": "Incorporar trazabilidad del atlas y corregir renderizado de datos; bloquear envíos concurrentes y conservar un aviso explícito cuando una transferencia queda parcial o incierta, sin reintentar escrituras automáticamente.",
+  "model_revision": "2026-11-13.tu-palabra.2",
+  "proposal_id": "CHG-FLUJO-CAJA-PROYECTO-20261113",
+  "summary": "PLAN-05 · caja por proyecto y piso de 5%. Las bolsas pueden traer «folio» (PRJ-…) y «costo_obra» desde la pestaña Bolsas. El tablero junta las bolsas del mismo folio en «Caja por proyecto», calcula el piso (5% del costo de obra del proyecto, sin sumarlo por bolsa) y marca «Abajo del piso»; la bolsa afectada pasa a «En riesgo» y su tarjeta lo dice. Un folio mal escrito no agrupa; sin folios la sección no aparece. Sólo lectura. El atlas fijado pasa a yod-portal 1a913be (revisión 2026-11-13.tu-palabra.2), donde existe la propuesta.",
   "components": [
     "SYS-FLUJO",
-    "GAS-FLUJO",
-    "SHEET-FLUJO"
+    "SHEET-FLUJO",
+    "GAS-FLUJO"
   ],
   "tests": [
     "git diff --check",
-    "node tests/flujo.test.cjs"
+    "node tests/flujo.test.cjs (10)"
   ],
-  "rollback": "Revertir el commit de este cambio mediante revisión y repetir las verificaciones locales. No borrar ni restaurar registros de negocio, Sheets o archivos de clientes como parte del rollback."
+  "rollback": "Revertir el PR. Las columnas de Bolsas se pueden dejar: nadie más las lee. No se borran ni restauran registros de negocio."
 }
