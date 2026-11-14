@@ -261,3 +261,78 @@ test('PLAN-05 · caja por proyecto con folio y alarma bajo el piso de 5% del cos
   const sin = fixture(); h.setDB(sin); h.context.renderAll();
   assert.equal(h.node('cajasSec').style.display, 'none');
 });
+
+test('PLAN-07 · lo autorizado en obra sale por programar con su folio y se va al programarse', () => {
+  const h = harness(), data = fixture();
+  data.bolsas = [{ nombre: 'Alysa obra', presupuesto: 300000, folio: 'PRJ-ALYSA', costo_obra: 2000000 }];
+  data.pagos = [{ id: 'P1', estado: 'Pagado', monto: 5000, fechaLimite: '2026-01-02', proyecto: 'Alysa obra', concepto: 'Estimación 1 · Cimentación · PRJ-ALYSA · AV-1', tipoPago: 'Único', prioridad: 'Alta' }];
+  data.movimientos = [{ id: 'M1', fecha: '2026-01-06', tipo: 'Egreso', monto: 700, beneficiario: 'Contratista', proyecto: 'Alysa obra', notas: 'pago directo de AV-5' }];
+  data.ingresosEsperados = [];
+  h.setDB(data);
+  const av = [
+    { id: 'AV-1', estado: 'AUTORIZADO', monto_propuesto: 5000, frente: 'Cimentación', fecha_autorizacion: '2026-01-01', estimacion_num: 1 },
+    { id: 'AV-10', estado: 'AUTORIZADO', monto_propuesto: 12000.5, frente: payload, fecha_autorizacion: '2026-01-05T08:00:00.000Z', estimacion_num: 3 },
+    { id: 'AV-2', estado: 'AUTORIZADO', monto_propuesto: 8000, frente: 'Muros', fecha_autorizacion: '2026-01-03', estimacion_num: 2 },
+    { id: 'AV-3', estado: 'VERIFICADO', monto_propuesto: 999, frente: 'Losa' },
+    { id: 'AV-4', estado: 'PAGADO', monto_propuesto: 999, frente: 'Losa' },
+    { id: 'AV-5', estado: 'AUTORIZADO', monto_propuesto: 700, frente: 'Pisos', fecha_autorizacion: '2026-01-04' }
+  ];
+  const l = h.context.obraPorProgramar(av, h.run('DB'), 'PRJ-ALYSA');
+  assert.equal(JSON.stringify(l.map(a => a.id)), JSON.stringify(['AV-2', 'AV-10']),
+    'AV-1 ya tiene pago (y AV-10 no se confunde con AV-1); AV-5 ya tiene movimiento; sólo cuenta AUTORIZADO');
+  assert.equal(l[1].monto, 12000.5); assert.equal(l[1].fecha, '2026-01-05'); assert.equal(l[1].folio, 'PRJ-ALYSA');
+
+  h.context.av = av;
+  h.run('OBRA={"PRJ-ALYSA":{estado:"ok",avances:av},"PRJ-RM":{estado:"sin_acceso"}}');
+  h.context.renderAll();
+  assert.equal(h.node('obraSec').style.display, '');
+  const t = h.node('obraPend').innerHTML;
+  safeMarkup(t);
+  assert.ok(t.includes('AV-2') && t.includes('n.º 3 · AV-10') && t.includes('$12,001') && t.includes('data-id="AV-10"'));
+  assert.ok(!t.includes('AV-1<') && !t.includes('AV-5'), 'lo ya programado o pagado no sale');
+  assert.ok(t.includes('PRJ-RM: tu sesión no tiene acceso a Obra'));
+  const c = h.node('cajas').innerHTML;
+  assert.ok(c.includes('incluye $20,001 autorizado en obra sin programar'), 'la caja del proyecto lo cuenta como compromiso');
+  const [caja] = h.context.cajasPorFolio(h.context.bolsasCalc(), h.run('DB'), '2026-01-01T00:00:00', { 'PRJ-ALYSA': 20000.5 });
+  assert.equal(caja.obra, 20000.5); assert.equal(caja.en8, caja.resta - 20000.5, 'en la proyección cae hoy');
+
+  for (const id of ['pgCon', 'pgMonto', 'pgFecha', 'pgTipo', 'pgPrio', 'pgProy']) h.context[id] = h.node(id);
+  h.context.programarDesdeObra('PRJ-ALYSA', 'AV-10');
+  assert.equal(h.node('pgCon').value, 'Estimación 3 · ' + payload + ' · PRJ-ALYSA · AV-10');
+  assert.equal(h.node('pgMonto').value, '12000.5');
+  assert.match(h.node('pgFecha').value, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(h.node('pgTipo').value, 'Único'); assert.equal(h.node('pgPrio').value, 'Alta');
+  assert.equal(h.node('pgProy').value, 'Alysa obra');
+  h.run('DB.pagos.push({id:"P2",estado:"Pendiente",monto:12000.5,fechaLimite:"2026-01-20",proyecto:"Alysa obra",concepto:pgCon.value,tipoPago:"Único",prioridad:"Alta"})');
+  assert.equal(JSON.stringify(h.context.obraPorProgramar(av, h.run('DB'), 'PRJ-ALYSA').map(a => a.id)), JSON.stringify(['AV-2']), 'programada, ya no se pide');
+  h.context.programarDesdeObra('PRJ-ALYSA', 'AV-10');   // ya no está: no toca el formulario
+  assert.equal(h.node('pgCon').value, 'Estimación 3 · ' + payload + ' · PRJ-ALYSA · AV-10');
+});
+
+test('PLAN-07 · a Obra sólo se le lee: el motor del folio, con la sesión y nada más', async () => {
+  const h = harness(), data = fixture();
+  data.bolsas = [{ nombre: 'Alysa obra', presupuesto: 1, folio: 'PRJ-ALYSA' }, { nombre: 'Miramar', presupuesto: 1, folio: 'PRJ-RM' }, { nombre: 'Sin folio', presupuesto: 1 }];
+  data.movimientos = []; data.pagos = []; data.ingresosEsperados = [];
+  h.setDB(data);
+  h.context.window.YOD_OBRAS = { obras: [
+    { folio: 'PRJ-ALYSA', motor: 'https://script.google.com/macros/s/AKfy_cb-1/exec' },
+    { folio: 'PRJ-RM', motor: 'https://otro.example/macros/s/x/exec' },
+    { folio: 'PRJ-NADA', motor: 'https://script.google.com/macros/s/AKfy2/exec' }
+  ] };
+  const pedidos = [];
+  h.context.fetch = async (url, o) => { pedidos.push({ url, o }); return { json: async () => ({ ok: true, avances: [{ id: 'AV-9', estado: 'AUTORIZADO', monto_propuesto: 10 }] }) }; };
+  await h.context.cargarObras();
+  assert.equal(pedidos.length, 1, 'sólo el motor válido de un folio que tiene bolsa');
+  assert.ok(pedidos[0].url.startsWith('https://script.google.com/macros/s/AKfy_cb-1/exec?recurso=board&k='));
+  assert.equal(pedidos[0].o.method, undefined, 'GET: nunca escribe en Obra');
+  assert.equal(pedidos[0].o.credentials, 'omit');
+  assert.equal(h.run('OBRA["PRJ-ALYSA"].estado'), 'ok');
+  assert.ok(h.node('obraPend').innerHTML.includes('AV-9'));
+  h.context.fetch = async () => ({ json: async () => ({ ok: false, error: 'liga' }) });
+  await h.context.cargarObras();
+  assert.equal(h.run('OBRA["PRJ-ALYSA"].estado'), 'sin_acceso');
+  h.context.fetch = async () => { throw new Error('sin red'); };
+  await h.context.cargarObras();
+  assert.equal(h.run('OBRA["PRJ-ALYSA"].estado'), 'sin_conexion');
+  assert.ok(h.node('obraPend').innerHTML.includes('Obra no contestó'));
+});
