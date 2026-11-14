@@ -1,15 +1,14 @@
 {
-  "model_revision": "2026-11-13.tu-palabra.2",
-  "proposal_id": "CHG-FLUJO-CAJA-PROYECTO-20261113",
-  "summary": "PLAN-05 · caja por proyecto y piso de 5%. Las bolsas pueden traer «folio» (PRJ-…) y «costo_obra» desde la pestaña Bolsas. El tablero junta las bolsas del mismo folio en «Caja por proyecto», calcula el piso (5% del costo de obra del proyecto, sin sumarlo por bolsa) y marca «Abajo del piso»; la bolsa afectada pasa a «En riesgo» y su tarjeta lo dice. Un folio mal escrito no agrupa; sin folios la sección no aparece. Sólo lectura. El atlas fijado pasa a yod-portal 1a913be (revisión 2026-11-13.tu-palabra.2), donde existe la propuesta.",
+  "model_revision": "2026-11-14.obra-flujo.1",
+  "proposal_id": "CHG-OBRA-FLUJO-20261114",
+  "summary": "PLAN-07 · lo autorizado en obra llega a la planificación con su folio. La pestaña Planificación gana «Autorizado en obra, por programar»: lee por GET el motor de obra de cada folio que tiene bolsa (registro obra-app/obras.js de yod-portal) y enseña las estimaciones AUTORIZADAS sin pago planificado ni movimiento con su id; «Programar pago» abre el formulario ya lleno y guardarlo es de quien lo revisa. En la caja por proyecto lo autorizado sin programar cuenta como compromiso de hoy. A Obra sólo se le lee. El atlas fijado pasa a yod-portal fafd1f7 (revisión 2026-11-14.obra-flujo.1), donde existe la propuesta.",
   "components": [
     "SYS-FLUJO",
-    "SHEET-FLUJO",
-    "GAS-FLUJO"
+    "GAS-OBRA"
   ],
   "tests": [
     "git diff --check",
-    "node tests/flujo.test.cjs (10)"
+    "node --test tests/flujo.test.cjs (12)"
   ],
-  "rollback": "Revertir el PR. Las columnas de Bolsas se pueden dejar: nadie más las lee. No se borran ni restauran registros de negocio."
+  "rollback": "Revertir el PR. No se escribe nada en Obra ni en el Sheet del Flujo por este cambio."
 }
