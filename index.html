@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <script src="https://yodesarrollomx.github.io/yod-portal/os/yod-acceso.js?v=1"></script>
+<!-- PLAN-07 · registro de obras (folio → motor de obra), el mismo que usa YOD Obra -->
+<script src="https://yodesarrollomx.github.io/yod-portal/obra-app/obras.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex,nofollow,noarchive">
 <title>YOD · Flujo 2026</title>
@@ -248,6 +250,10 @@ h1.title{color:var(--ink)}
   <!-- PLANIFICACIÓN -->
   <div class="view" id="plan">
     <div class="cards" id="planKpis"></div>
+    <div class="section" id="obraSec" style="display:none">
+      <h3>Autorizado en obra, por programar <span class="muted">estimaciones que Obra ya autorizó para pago y todavía no están en la planificación</span></h3>
+      <div id="obraPend"></div>
+    </div>
     <div class="section">
       <h3>Planificación de pagos mes a mes
         <span><button class="add-btn" onclick="openPago()">+ Pago planificado</button>
@@ -511,6 +517,7 @@ async function loadAll(){
     }
     document.getElementById('syncInfo').textContent = "Sync: " + new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
     renderAll();
+    cargarObras();
   }catch(e){
     try{
       DB = await cargarRespaldoLocal();
@@ -543,11 +550,12 @@ const PISO_OBRA=0.05;   // PLAN-05 · alarma cuando la caja de un proyecto baja 
 function folioDe(v){const f=String(v==null?"":v).trim().toUpperCase();return /^PRJ-[A-Z0-9-]{2,40}$/.test(f)?f:"";}
 /* Caja por proyecto: suma las bolsas del mismo folio. El piso es 5% del costo de obra (el mayor que traiga
    alguna de sus bolsas: el costo es del proyecto, no se suma por bolsa). */
-function cajasPorFolio(bs,db,hoy){
+function cajasPorFolio(bs,db,hoy,obra){
   const g={};
   bs.forEach(b=>{ if(!b.folio) return; const c=g[b.folio]||(g[b.folio]={folio:b.folio,bolsas:[],resta:0,comprometido:0,costoObra:0});
     c.bolsas.push(b.nombre); c.resta+=b.resta; c.comprometido+=b.comprometido||0; c.costoObra=Math.max(c.costoObra,b.costoObra||0); });
-  return Object.values(g).map(c=>{c.piso=c.costoObra>0?c.costoObra*PISO_OBRA:0;c.bajoPiso=c.piso>0&&c.resta<c.piso;
+  return Object.values(g).map(c=>{c.obra=Math.max(0,+((obra||{})[c.folio])||0);c.comprometido+=c.obra;
+      c.piso=c.costoObra>0?c.costoObra*PISO_OBRA:0;c.bajoPiso=c.piso>0&&c.resta<c.piso;
       if(db){const p=proyeccionFolio(c,db,hoy);c.en8=p.fin;c.cae=p.cae;c.caeDesde=p.cae>=0?p.sem[p.cae].desde:null;}
       return c;})
     .sort((a,b)=>(b.bajoPiso-a.bajoPiso)||((b.cae>=0)-(a.cae>=0))||a.folio.localeCompare(b.folio));
@@ -557,11 +565,65 @@ function cajasPorFolio(bs,db,hoy){
    primera semana en que bajaría del piso. No inventa: sin compromisos capturados, la caja se queda igual. */
 function proyeccionFolio(c,db,hoy){
   const de=new Set(c.bolsas);
+  const hoyISO=_isoLocal(hoy?new Date(hoy):new Date());
   const sem=proyeccion8({saldo:{monto:c.resta},
-    pagos:(db.pagos||[]).filter(p=>de.has(p.proyecto)),
+    pagos:(db.pagos||[]).filter(p=>de.has(p.proyecto)).concat(c.obra?[{concepto:"Autorizado en obra, por programar",monto:c.obra,fechaLimite:hoyISO,estado:"Pendiente"}]:[]),
     ingresosEsperados:(db.ingresosEsperados||[]).filter(i=>de.has(i.proyecto))},hoy);
   const cae=c.piso>0?sem.findIndex(w=>w.saldo<c.piso):-1;
   return {sem,cae,fin:sem.length?sem[sem.length-1].saldo:c.resta};
+}
+/* PLAN-07 · Obra → Flujo. Lo que el motor de obra de cada folio (registro obra-app/obras.js de yod-portal) ya
+   AUTORIZÓ para pago y todavía no está en la planificación. Una estimación sale de la lista en cuanto un pago
+   planificado (en cualquier estado) o un movimiento trae su id. «Programar pago» abre el formulario de pago
+   planificado ya lleno con el id; guardarlo sigue siendo de quien lo revisa. A Obra sólo se le lee. */
+let OBRA={};
+function _tieneId(txt,id){id=String(id||"");return !!id&&new RegExp("(^|[^A-Za-z0-9-])"+id.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"($|[^A-Za-z0-9-])","i").test(String(txt==null?"":txt));}
+function obraPorProgramar(avances,db,folio){
+  const pagos=(db&&db.pagos)||[], movs=(db&&db.movimientos)||[];
+  return (avances||[]).filter(a=>a&&a.id&&String(a.estado||"").toUpperCase()==="AUTORIZADO")
+    .filter(a=>!pagos.some(p=>_tieneId(p.concepto,a.id)||_tieneId(p.notas,a.id))&&!movs.some(m=>_tieneId(m.notas,a.id)||_tieneId(m.beneficiario,a.id)))
+    .map(a=>({folio,id:String(a.id),frente:String(a.frente||""),monto:Math.max(0,+a.monto_propuesto||0),estimacion:String(a.estimacion_num||""),fecha:String(a.fecha_autorizacion||a.fecha||"").slice(0,10)}))
+    .sort((x,y)=>x.fecha.localeCompare(y.fecha)||x.id.localeCompare(y.id));
+}
+function obraPendientePorFolio(){
+  const r={}; Object.keys(OBRA).forEach(f=>{const o=OBRA[f]; if(o.estado==="ok") r[f]=obraPorProgramar(o.avances,DB,f).reduce((s,a)=>s+a.monto,0);}); return r;
+}
+async function cargarObras(){
+  const R=window.YOD_OBRAS; if(DEMO||!R||!Array.isArray(R.obras)) return;
+  const folios=new Set(DB.bolsas.map(b=>folioDe(b.folio)).filter(Boolean));
+  const obras=R.obras.filter(o=>o&&folios.has(o.folio)&&/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(o.motor||""));
+  if(!obras.length) return;
+  await Promise.all(obras.map(async o=>{
+    const ctl=typeof AbortController!=="undefined"?new AbortController():null, t=ctl?setTimeout(()=>ctl.abort(),30000):0;
+    try{
+      const r=await fetch(o.motor+"?recurso=board&k="+encodeURIComponent(credencial()),{credentials:"omit",cache:"no-store",signal:ctl?ctl.signal:undefined});
+      const j=await r.json();
+      OBRA[o.folio]=j&&j.ok?{estado:"ok",avances:Array.isArray(j.avances)?j.avances:[]}:{estado:"sin_acceso"};
+    }catch(e){ OBRA[o.folio]={estado:"sin_conexion"}; }
+    finally{ if(t) clearTimeout(t); }
+  }));
+  renderAll();
+}
+function renderObra(){
+  const sec=document.getElementById('obraSec'), fs=Object.keys(OBRA).sort();
+  if(!sec) return; sec.style.display=fs.length?"":"none"; if(!fs.length) return;
+  const filas=[], notas=[];
+  fs.forEach(f=>{const o=OBRA[f];
+    if(o.estado!=="ok"){notas.push(f+": "+(o.estado==="sin_acceso"?"tu sesión no tiene acceso a Obra":"Obra no contestó; se vuelve a leer al actualizar"));return;}
+    const aut=o.avances.filter(a=>String(a.estado||"").toUpperCase()==="AUTORIZADO").length, l=obraPorProgramar(o.avances,DB,f);
+    if(!l.length) notas.push(f+": "+(aut?"todo lo autorizado en obra ya está programado":"Obra no tiene estimaciones autorizadas por pagar"));
+    filas.push(...l);});
+  document.getElementById('obraPend').innerHTML=(filas.length?`<table><tr><th>Proyecto</th><th>Estimación</th><th>Frente</th><th>Monto</th><th>Autorizada</th><th></th></tr>${filas.map(a=>`<tr><td><b>${escHtml(a.folio)}</b></td><td>${escHtml(a.estimacion?("n.º "+a.estimacion+" · "):"")}${escHtml(a.id)}</td><td>${escHtml(a.frente||"—")}</td><td>${fmt0(a.monto)}</td><td>${escHtml(a.fecha?_fechaCorta(a.fecha):"—")}</td><td><button class="linklike" data-folio="${escHtml(a.folio)}" data-id="${escHtml(a.id)}" onclick="programarDesdeObra(this.dataset.folio,this.dataset.id)">Programar pago</button></td></tr>`).join("")}</table>`:"")+
+    (notas.length?`<p class="muted">${notas.map(escHtml).join(" · ")}</p>`:"");
+}
+function programarDesdeObra(folio,id){
+  const o=OBRA[folio], a=o&&o.estado==="ok"?obraPorProgramar(o.avances,DB,folio).find(x=>x.id===id):null; if(!a) return;
+  openPago();
+  pgCon.value="Estimación "+(a.estimacion?a.estimacion+" ":"")+"· "+(a.frente||"obra")+" · "+folio+" · "+a.id;
+  pgMonto.value=a.monto?String(Math.round(a.monto*100)/100):"";
+  const d=new Date(); d.setDate(d.getDate()+7); pgFecha.value=_isoLocal(d);
+  pgTipo.value="Único"; pgPrio.value="Alta";
+  const b=DB.bolsas.find(x=>folioDe(x.folio)===folio); if(b) pgProy.value=b.nombre;
 }
 function estadoCaja(c){return c.bajoPiso?["bajo","⚠ Abajo del piso"]:c.cae>=0?["bajo","⚠ Bajaría del piso la semana del "+_fechaCorta(_isoLocal(c.caeDesde))]:c.piso?["","Arriba del piso"]:["","Falta su costo de obra"];}
 function _isoLocal(d){return d?d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"):"";}
@@ -672,10 +734,10 @@ function renderDash(){
   // Bolsas con salud
   const bs=bolsasCalc();
   // PLAN-05 · caja por proyecto (folio), con su piso de 5% del costo de obra
-  const cajas=cajasPorFolio(bs,DB), cajasSec=document.getElementById('cajasSec');
+  const cajas=cajasPorFolio(bs,DB,undefined,obraPendientePorFolio()), cajasSec=document.getElementById('cajasSec');
   if(cajasSec){
     cajasSec.style.display=cajas.length?"":"none";
-    document.getElementById('cajas').innerHTML=cajas.length?`<table class="cajas"><thead><tr><th>Proyecto</th><th class="bolsasCol">Bolsas</th><th class="n">Caja</th><th class="n">Piso 5% de obra</th><th class="n">En 8 semanas</th><th class="estadoCol">Estado</th></tr></thead><tbody>${cajas.map(c=>`<tr><td><b>${escHtml(c.folio)}</b><div class="estadoMovil ${estadoCaja(c)[0]}">${escHtml(estadoCaja(c)[1])}</div></td><td class="bolsasCol">${c.bolsas.map(escHtml).join(", ")}</td><td class="n">${fmt0(c.resta)}</td><td class="n">${c.piso?fmt0(c.piso):"—"}</td><td class="n">${fmt0(c.en8)}</td><td class="estadoCol ${estadoCaja(c)[0]}">${escHtml(estadoCaja(c)[1])}</td></tr>`).join("")}</tbody></table>`:"";
+    document.getElementById('cajas').innerHTML=cajas.length?`<table class="cajas"><thead><tr><th>Proyecto</th><th class="bolsasCol">Bolsas</th><th class="n">Caja</th><th class="n">Piso 5% de obra</th><th class="n">En 8 semanas</th><th class="estadoCol">Estado</th></tr></thead><tbody>${cajas.map(c=>`<tr><td><b>${escHtml(c.folio)}</b><div class="estadoMovil ${estadoCaja(c)[0]}">${escHtml(estadoCaja(c)[1])}</div></td><td class="bolsasCol">${c.bolsas.map(escHtml).join(", ")}</td><td class="n">${fmt0(c.resta)}</td><td class="n">${c.piso?fmt0(c.piso):"—"}</td><td class="n">${fmt0(c.en8)}</td><td class="estadoCol ${estadoCaja(c)[0]}">${escHtml(estadoCaja(c)[1])}${c.obra?`<div class="muted">incluye ${fmt0(c.obra)} autorizado en obra sin programar</div>`:""}</td></tr>`).join("")}</tbody></table>`:"";
   }
   document.getElementById('bolsas').innerHTML=bs.map(b=>{
     const [icon,txt]=SALUD_TXT[b.salud], col=SALUD_COL[b.salud];
@@ -960,6 +1022,7 @@ async function toggleFact(id){
 function clearFilters(){["fBolsa","fTipo","fMes","fDesde","fHasta","fTxt"].forEach(id=>document.getElementById(id).value="");renderMovs()}
 
 function renderPlan(){
+  renderObra();
   const pend=DB.pagos.filter(p=>p.estado!=="Pagado");
   const totComp=pend.reduce((s,p)=>s+ +p.monto,0);
   const espera=DB.ingresosEsperados.filter(i=>i.estatus!=="Cobrado").reduce((s,i)=>s+ +i.monto,0);
